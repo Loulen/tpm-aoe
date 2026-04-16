@@ -3,6 +3,7 @@
 pub mod agents;
 pub mod cli;
 pub mod containers;
+pub mod events;
 pub mod git;
 pub mod hooks;
 pub mod migrations;

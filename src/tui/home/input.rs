@@ -499,13 +499,12 @@ impl HomeView {
 
         // Normal mode keybindings
         match key.code {
-            KeyCode::Esc => {
-                if !self.search_matches.is_empty() {
+            KeyCode::Esc
+                if !self.search_matches.is_empty() => {
                     self.search_matches.clear();
                     self.search_match_index = 0;
                     self.search_query = Input::default();
                 }
-            }
             KeyCode::Char('q') => return Some(Action::Quit),
             KeyCode::Char('?') => {
                 self.show_help = true;
@@ -558,9 +557,9 @@ impl HomeView {
                     return Some(Action::AttachTerminal(id.clone(), terminal_mode));
                 }
             }
-            KeyCode::Char('c') => {
+            KeyCode::Char('c')
                 // Toggle container/host terminal mode (only in Terminal view for sandboxed sessions)
-                if self.view_mode == ViewMode::Terminal {
+                if self.view_mode == ViewMode::Terminal => {
                     if let Some(id) = &self.selected_session {
                         if let Some(inst) = self.get_instance(id) {
                             if inst.is_sandboxed() {
@@ -575,7 +574,6 @@ impl HomeView {
                         }
                     }
                 }
-            }
             KeyCode::Char('/') => {
                 self.search_active = true;
                 self.search_query = Input::default();
@@ -920,12 +918,11 @@ impl HomeView {
             KeyCode::Char('g') => {
                 self.apply_group_by(self.group_by.cycle());
             }
-            KeyCode::End | KeyCode::Char('G') => {
-                if !self.flat_items.is_empty() {
+            KeyCode::End | KeyCode::Char('G')
+                if !self.flat_items.is_empty() => {
                     self.cursor = self.flat_items.len() - 1;
                     self.update_selected();
                 }
-            }
             KeyCode::Enter => {
                 if let Some(id) = &self.selected_session {
                     if let Some(inst) = self.get_instance(id) {
@@ -1142,7 +1139,7 @@ impl HomeView {
             }
         }
 
-        scored.sort_by(|a, b| b.1.cmp(&a.1));
+        scored.sort_by_key(|b| std::cmp::Reverse(b.1));
         self.search_matches = scored.into_iter().map(|(idx, _)| idx).collect();
         // Clamp match_index in case matches shrank
         if self.search_matches.is_empty() {
@@ -1196,7 +1193,7 @@ impl HomeView {
             }
         }
 
-        scored.sort_by(|a, b| b.1.cmp(&a.1));
+        scored.sort_by_key(|b| std::cmp::Reverse(b.1));
         self.search_matches = scored.into_iter().map(|(idx, _)| idx).collect();
 
         if let Some(&best) = self.search_matches.first() {

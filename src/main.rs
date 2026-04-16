@@ -80,6 +80,7 @@ async fn main() -> Result<()> {
         Some(Commands::Status(args)) => cli::status::run(&profile, args).await,
         Some(Commands::Session { command }) => cli::session::run(&profile, command).await,
         Some(Commands::Group { command }) => cli::group::run(&profile, command).await,
+        Some(Commands::Events { command }) => cli::events::run(&profile, command).await,
         Some(Commands::Profile { command }) => cli::profile::run(command).await,
         Some(Commands::Worktree { command }) => cli::worktree::run(&profile, command).await,
         #[cfg(feature = "serve")]

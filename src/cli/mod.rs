@@ -2,6 +2,7 @@
 
 pub mod add;
 pub mod definition;
+pub mod events;
 pub mod group;
 pub mod init;
 pub mod list;

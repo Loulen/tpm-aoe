@@ -7,6 +7,7 @@ use clap::{Parser, Subcommand};
 use clap_complete::Shell;
 
 use super::add::AddArgs;
+use super::events::EventsCommands;
 use super::group::GroupCommands;
 use super::init::InitArgs;
 use super::list::ListArgs;
@@ -75,6 +76,12 @@ pub enum Commands {
     Group {
         #[command(subcommand)]
         command: GroupCommands,
+    },
+
+    /// Stream and emit events on the event bus (for orchestration)
+    Events {
+        #[command(subcommand)]
+        command: EventsCommands,
     },
 
     /// Manage profiles (separate workspaces)
