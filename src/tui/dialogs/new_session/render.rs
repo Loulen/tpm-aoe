@@ -315,8 +315,7 @@ impl NewSessionDialog {
                     if i > 0 {
                         tpm_spans.push(Span::raw("  "));
                     }
-                    tpm_spans
-                        .push(Span::styled(if is_selected { "● " } else { "○ " }, style));
+                    tpm_spans.push(Span::styled(if is_selected { "● " } else { "○ " }, style));
                     tpm_spans.push(Span::styled(*label, style));
                 }
 

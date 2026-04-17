@@ -276,10 +276,9 @@ pub async fn create_session(
             extra_args: body.extra_args,
             command_override: body.command_override,
             extra_repo_paths,
-            // The web dashboard does not yet expose the TPM toggle; the
-            // builder treats `false` as "don't inject the orchestrator
-            // prompt", matching the previous behavior.
-            tpm_mode: false,
+            // The web dashboard does not yet expose TPM tier selection;
+            // `None` preserves the previous behavior (no orchestrator prompt).
+            tpm_tier: None,
             // No equivalent in the web API today — defaults to HEAD.
             worktree_from_branch: None,
         };
