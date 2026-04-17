@@ -280,9 +280,9 @@ impl NewSessionDialog {
             ci += 1;
         }
 
-        // TPM Mode checkbox (only when the orchestrator prompt is reachable
-        // and the selected tool can host it). Sits between YOLO and Worktree
-        // because the user typically pairs TPM mode with a worktree.
+        // TPM Mode tier selector (only when the orchestrator prompt is
+        // reachable and the selected tool can host it). Uses radio-button
+        // style like the Tool selector above.
         if has_tpm {
             let is_tpm_focused = self.focused_field == tpm_field;
             let tpm_label_style = if is_tpm_focused {
@@ -291,35 +291,48 @@ impl NewSessionDialog {
                 Style::default().fg(theme.text)
             };
 
-            let tpm_checkbox = if self.tpm_mode { "[x]" } else { "[ ]" };
-            let tpm_checkbox_style = if self.tpm_mode {
-                Style::default().fg(theme.accent).bold()
-            } else {
-                Style::default().fg(theme.dimmed)
-            };
+            let is_active = self.tpm_tier.is_some();
 
-            // Label mentions autonomy explicitly — ticking this box will
-            // cause the orchestrator to spawn additional sessions via
-            // `aoe add` on its own. The warning span turns bold when on so
-            // the side-effect is hard to miss.
-            let desc_style = if self.tpm_mode {
-                Style::default().fg(theme.accent)
+            let mut tpm_spans = vec![Span::styled("TPM Mode:", tpm_label_style), Span::raw(" ")];
+
+            if is_active {
+                use crate::tpm::TpmTier;
+                let current = self.tpm_tier.unwrap();
+                for (i, (tier, label)) in [
+                    (TpmTier::Fast, "fast"),
+                    (TpmTier::Standard, "standard"),
+                    (TpmTier::Prod, "prod"),
+                ]
+                .iter()
+                .enumerate()
+                {
+                    let is_selected = current == *tier;
+                    let style = if is_selected {
+                        Style::default().fg(theme.accent).bold()
+                    } else {
+                        Style::default().fg(theme.dimmed)
+                    };
+                    if i > 0 {
+                        tpm_spans.push(Span::raw("  "));
+                    }
+                    tpm_spans
+                        .push(Span::styled(if is_selected { "● " } else { "○ " }, style));
+                    tpm_spans.push(Span::styled(*label, style));
+                }
+
+                // Warning: autonomously spawns sub-sessions
+                tpm_spans.push(Span::styled(
+                    "  — autonomously spawns sub-sessions",
+                    Style::default().fg(theme.accent).bold(),
+                ));
             } else {
-                Style::default().fg(theme.dimmed)
-            };
-            let warning_style = if self.tpm_mode {
-                Style::default().fg(theme.accent).bold()
-            } else {
-                Style::default().fg(theme.dimmed)
-            };
-            let tpm_line = Line::from(vec![
-                Span::styled("TPM Mode:", tpm_label_style),
-                Span::raw(" "),
-                Span::styled(tpm_checkbox, tpm_checkbox_style),
-                Span::styled(" Orchestrator — ", desc_style),
-                Span::styled("autonomously spawns sub-sessions via aoe", warning_style),
-            ]);
-            frame.render_widget(Paragraph::new(tpm_line), chunks[ci]);
+                tpm_spans.push(Span::styled(
+                    "[off] Orchestrator",
+                    Style::default().fg(theme.dimmed),
+                ));
+            }
+
+            frame.render_widget(Paragraph::new(Line::from(tpm_spans)), chunks[ci]);
             ci += 1;
         }
 
