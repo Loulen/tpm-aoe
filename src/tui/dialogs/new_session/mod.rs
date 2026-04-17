@@ -56,7 +56,7 @@ pub(super) const FIELD_HELP: &[FieldHelp] = &[
     },
     FieldHelp {
         name: "TPM Mode",
-        description: "Orchestrator: autonomously spawns planner/implementer/reviewer sub-sessions.",
+        description: "Orchestrator tier (fast/standard/prod): autonomously spawns sub-sessions.",
     },
     FieldHelp {
         name: "Worktree",
