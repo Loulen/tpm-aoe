@@ -8,6 +8,7 @@ use crate::containers::{self, ContainerRuntimeInterface};
 use crate::session::builder;
 use crate::session::repo_config;
 use crate::session::{civilizations, GroupTree, Instance, SandboxInfo, Storage};
+use crate::tpm::TpmTier;
 
 #[derive(Args)]
 pub struct AddArgs {
@@ -82,8 +83,11 @@ pub struct AddArgs {
     /// Boot the session as the TPM orchestrator. Requires the `tpm-workflow`
     /// plugin (or a `TPM_WORKFLOW_PATH` checkout). Currently only compatible
     /// with the `claude` tool.
-    #[arg(long)]
-    tpm: bool,
+    ///
+    /// Accepts an optional tier: `--tpm` defaults to standard,
+    /// `--tpm=fast` or `--tpm=prod` selects a different tier.
+    #[arg(long, num_args = 0..=1, default_missing_value = "standard", value_parser = clap::value_parser!(TpmTier))]
+    tpm: Option<TpmTier>,
 }
 
 pub async fn run(profile: &str, args: AddArgs) -> Result<()> {
@@ -315,12 +319,12 @@ pub async fn run(profile: &str, args: AddArgs) -> Result<()> {
         }
     }
 
-    if args.tpm {
+    if let Some(tier) = args.tpm {
         instance.extra_args = crate::tpm::build_tpm_extra_args(
             &instance.tool,
             Some(&original_project_path),
             &instance.extra_args,
-            crate::tpm::TpmTier::Standard,
+            tier,
         )?;
     }
 
