@@ -43,10 +43,11 @@ pub struct InstanceParams {
     pub command_override: String,
     /// Additional repository paths for multi-repo workspace mode
     pub extra_repo_paths: Vec<String>,
-    /// When true, inject the TPM orchestrator system prompt into `extra_args`.
+    /// When set, inject the TPM orchestrator system prompt into `extra_args`
+    /// at the given tier. `None` means TPM mode is off.
     /// See `crate::tpm` for resolution rules and the shell snippet that gets
     /// merged in.
-    pub tpm_mode: bool,
+    pub tpm_tier: Option<crate::tpm::TpmTier>,
 }
 
 /// Result of building an instance, tracking what was created for cleanup purposes.
@@ -384,7 +385,7 @@ pub fn build_instance(
         }
     }
 
-    if params.tpm_mode {
+    if let Some(tier) = params.tpm_tier {
         // Resolve the orchestrator path against the user-provided project
         // path (not the worktree path), so a `tpm-aoe` checkout's `contrib/`
         // submodule still wins when sessions live in a sibling worktree dir.
@@ -393,7 +394,7 @@ pub fn build_instance(
             &params.tool,
             Some(&repo_root),
             &instance.extra_args,
-            crate::tpm::TpmTier::Standard,
+            tier,
         )?;
     }
 
