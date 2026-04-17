@@ -423,6 +423,7 @@ Watch new events as they're emitted (live tail)
 
 * `--filter <FILTER>` — Comma-separated list of event types to include (e.g. "session.completed,session.failed")
 * `--group <GROUP>` — Filter to events with this group
+* `--session <SESSION>` — Filter to events with this session ID (exact match). The orchestrator uses this to pin one Monitor per dispatched session
 
 
 
@@ -437,6 +438,7 @@ Read past events from the log
 * `--since <SINCE>` — Show events since this duration ago (e.g. "1h", "30m", "2d")
 * `--filter <FILTER>` — Comma-separated list of event types to include
 * `--group <GROUP>` — Filter to events with this group
+* `--session <SESSION>` — Filter to events with this session ID (exact match)
 
 
 

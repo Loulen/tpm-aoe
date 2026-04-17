@@ -40,6 +40,11 @@ pub struct WatchArgs {
     /// Filter to events with this group
     #[arg(long)]
     pub group: Option<String>,
+
+    /// Filter to events with this session ID (exact match). The orchestrator
+    /// uses this to pin one Monitor per dispatched session.
+    #[arg(long)]
+    pub session: Option<String>,
 }
 
 #[derive(Args)]
@@ -55,6 +60,10 @@ pub struct HistoryArgs {
     /// Filter to events with this group
     #[arg(long)]
     pub group: Option<String>,
+
+    /// Filter to events with this session ID (exact match).
+    #[arg(long)]
+    pub session: Option<String>,
 }
 
 #[derive(Args)]
@@ -134,6 +143,7 @@ pub async fn run(profile: &str, command: EventsCommands) -> Result<()> {
 fn run_watch(profile: &str, args: WatchArgs) -> Result<()> {
     let filter_set: std::collections::HashSet<String> = args.filter.into_iter().collect();
     let group_filter = args.group;
+    let session_filter = args.session;
 
     tail_events(profile, Duration::from_millis(250), move |event| {
         if !filter_set.is_empty() && !filter_set.contains(event.type_name()) {
@@ -141,6 +151,11 @@ fn run_watch(profile: &str, args: WatchArgs) -> Result<()> {
         }
         if let Some(ref g) = group_filter {
             if event.group() != Some(g.as_str()) {
+                return true;
+            }
+        }
+        if let Some(ref sid) = session_filter {
+            if event.session_id() != Some(sid.as_str()) {
                 return true;
             }
         }
@@ -167,6 +182,11 @@ fn run_history(profile: &str, args: HistoryArgs) -> Result<()> {
         }
         if let Some(ref g) = args.group {
             if event.group() != Some(g.as_str()) {
+                continue;
+            }
+        }
+        if let Some(ref sid) = args.session {
+            if event.session_id() != Some(sid.as_str()) {
                 continue;
             }
         }

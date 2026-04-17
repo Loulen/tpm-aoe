@@ -116,6 +116,24 @@ impl Event {
         }
     }
 
+    /// Return the session ID associated with this event, if any. Used for
+    /// filtering by `--session` in `aoe events watch` — the TPM orchestrator
+    /// uses this to pin one Monitor per dispatched session so it can react
+    /// to each session's completion independently without parsing the JSON
+    /// to demultiplex a group-wide stream.
+    pub fn session_id(&self) -> Option<&str> {
+        match self {
+            Event::SessionStarted { session_id, .. }
+            | Event::SessionCompleted { session_id, .. }
+            | Event::SessionFailed { session_id, .. }
+            | Event::SessionIdle { session_id, .. }
+            | Event::SessionWaiting { session_id, .. } => Some(session_id.as_str()),
+            Event::WorktreeCreated { .. }
+            | Event::WorktreeRemoved { .. }
+            | Event::Custom { .. } => None,
+        }
+    }
+
     /// Return the timestamp.
     pub fn timestamp(&self) -> DateTime<Utc> {
         match self {
@@ -128,6 +146,45 @@ impl Event {
             | Event::WorktreeRemoved { ts, .. }
             | Event::Custom { ts, .. } => *ts,
         }
+    }
+}
+
+#[cfg(test)]
+mod session_id_tests {
+    use super::*;
+
+    #[test]
+    fn session_id_is_returned_for_session_events() {
+        let ts = Utc::now();
+        let ev = Event::SessionCompleted {
+            ts,
+            session_id: "abc123".into(),
+            title: "t".into(),
+            group: None,
+            worktree: None,
+            summary_path: None,
+            exit_code: Some(0),
+        };
+        assert_eq!(ev.session_id(), Some("abc123"));
+    }
+
+    #[test]
+    fn session_id_is_none_for_non_session_events() {
+        use std::collections::BTreeMap;
+        let ev = Event::Custom {
+            ts: Utc::now(),
+            name: "custom".into(),
+            attrs: BTreeMap::new(),
+        };
+        assert!(ev.session_id().is_none());
+
+        let ev = Event::WorktreeCreated {
+            ts: Utc::now(),
+            name: "wt".into(),
+            path: "/tmp/wt".into(),
+            branch: Some("b".into()),
+        };
+        assert!(ev.session_id().is_none());
     }
 }
 
