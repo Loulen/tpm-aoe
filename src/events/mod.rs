@@ -7,7 +7,9 @@
 //! tails events to know when child sessions complete, fail, or need attention.
 
 pub mod log;
+pub mod sweeper;
 pub mod types;
 
 pub use log::{events_log_path, read_history, tail_events, write_event};
+pub use sweeper::{run_sweeper, sweep_once};
 pub use types::Event;

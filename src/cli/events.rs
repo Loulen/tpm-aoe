@@ -7,7 +7,7 @@ use anyhow::{bail, Result};
 use chrono::Utc;
 use clap::{Args, Subcommand};
 
-use crate::events::{read_history, tail_events, write_event, Event};
+use crate::events::{read_history, run_sweeper, tail_events, write_event, Event};
 
 #[derive(Subcommand)]
 pub enum EventsCommands {
@@ -19,6 +19,16 @@ pub enum EventsCommands {
 
     /// Emit an event to the bus
     Emit(EmitArgs),
+
+    /// Run the lifecycle sweeper that auto-emits session.* events on status transitions
+    Daemon(DaemonArgs),
+}
+
+#[derive(Args)]
+pub struct DaemonArgs {
+    /// Poll interval in seconds (default: 2)
+    #[arg(long, default_value = "2")]
+    pub interval: u64,
 }
 
 #[derive(Args)]
@@ -110,6 +120,14 @@ pub async fn run(profile: &str, command: EventsCommands) -> Result<()> {
         EventsCommands::Watch(args) => run_watch(profile, args),
         EventsCommands::History(args) => run_history(profile, args),
         EventsCommands::Emit(args) => run_emit(profile, args),
+        EventsCommands::Daemon(args) => {
+            let interval = Duration::from_secs(args.interval.max(1));
+            eprintln!(
+                "Starting events daemon for profile '{}' (poll every {}s). Press Ctrl-C to stop.",
+                profile, args.interval
+            );
+            run_sweeper(profile.to_string(), interval).await
+        }
     }
 }
 
