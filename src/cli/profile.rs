@@ -3,8 +3,9 @@
 use anyhow::{bail, Result};
 use clap::Subcommand;
 use std::io::{self, Write};
+use std::str::FromStr;
 
-use crate::session;
+use crate::session::{self, profile_templates::Template};
 
 #[derive(Subcommand)]
 pub enum ProfileCommands {
@@ -17,6 +18,11 @@ pub enum ProfileCommands {
     Create {
         /// Profile name
         name: String,
+
+        /// Pre-configure the profile from a built-in template (e.g., `tpm`).
+        /// The template's overrides are written to the profile's config.toml.
+        #[arg(long, value_parser = clap::builder::PossibleValuesParser::new(Template::ALL))]
+        template: Option<String>,
     },
 
     /// Delete a profile
@@ -45,7 +51,9 @@ pub enum ProfileCommands {
 pub async fn run(command: Option<ProfileCommands>) -> Result<()> {
     match command {
         Some(ProfileCommands::List) | None => list_profiles().await,
-        Some(ProfileCommands::Create { name }) => create_profile(&name).await,
+        Some(ProfileCommands::Create { name, template }) => {
+            create_profile(&name, template.as_deref()).await
+        }
         Some(ProfileCommands::Delete { name }) => delete_profile(&name).await,
         Some(ProfileCommands::Rename { old_name, new_name }) => {
             rename_profile(&old_name, &new_name).await
@@ -87,9 +95,19 @@ async fn list_profiles() -> Result<()> {
     Ok(())
 }
 
-async fn create_profile(name: &str) -> Result<()> {
-    session::create_profile(name)?;
-    println!("✓ Created profile: {}", name);
+async fn create_profile(name: &str, template: Option<&str>) -> Result<()> {
+    if let Some(template_name) = template {
+        let parsed = Template::from_str(template_name)?;
+        session::create_profile_with_template(name, parsed)?;
+        println!(
+            "✓ Created profile: {} (template: {})",
+            name,
+            parsed.as_str()
+        );
+    } else {
+        session::create_profile(name)?;
+        println!("✓ Created profile: {}", name);
+    }
     println!("  Use with: agent-of-empires -p {}", name);
     Ok(())
 }

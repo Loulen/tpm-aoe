@@ -8,6 +8,7 @@ pub(crate) mod environment;
 mod groups;
 mod instance;
 pub mod profile_config;
+pub mod profile_templates;
 pub mod repo_config;
 pub(crate) mod serde_helpers;
 mod storage;
@@ -102,6 +103,22 @@ pub fn list_profiles() -> Result<Vec<String>> {
 }
 
 pub fn create_profile(name: &str) -> Result<()> {
+    create_profile_inner(name, None)
+}
+
+/// Create a profile and seed it with a built-in template's overrides.
+///
+/// The template's [`ProfileConfig`](profile_config::ProfileConfig) is written
+/// to `<profile_dir>/config.toml` so the user can edit it afterwards. If the
+/// template would produce an empty config (no overrides), no file is written.
+pub fn create_profile_with_template(
+    name: &str,
+    template: profile_templates::Template,
+) -> Result<()> {
+    create_profile_inner(name, Some(template))
+}
+
+fn create_profile_inner(name: &str, template: Option<profile_templates::Template>) -> Result<()> {
     if name.is_empty() {
         anyhow::bail!("Profile name cannot be empty");
     }
@@ -118,6 +135,14 @@ pub fn create_profile(name: &str) -> Result<()> {
     }
 
     get_profile_dir(name)?;
+
+    if let Some(template) = template {
+        let cfg = profile_templates::build(template);
+        if profile_config::profile_has_overrides(&cfg) {
+            profile_config::save_profile_config(name, &cfg)?;
+        }
+    }
+
     Ok(())
 }
 

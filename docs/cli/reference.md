@@ -25,6 +25,11 @@ This document contains the help content for the `aoe` command-line program.
 * [`aoe group create`↴](#aoe-group-create)
 * [`aoe group delete`↴](#aoe-group-delete)
 * [`aoe group move`↴](#aoe-group-move)
+* [`aoe events`↴](#aoe-events)
+* [`aoe events watch`↴](#aoe-events-watch)
+* [`aoe events history`↴](#aoe-events-history)
+* [`aoe events emit`↴](#aoe-events-emit)
+* [`aoe events daemon`↴](#aoe-events-daemon)
 * [`aoe profile`↴](#aoe-profile)
 * [`aoe profile list`↴](#aoe-profile-list)
 * [`aoe profile create`↴](#aoe-profile-create)
@@ -67,6 +72,7 @@ Run without arguments to launch the TUI dashboard.
 * `status` — Show session status summary
 * `session` — Manage session lifecycle (start, stop, attach, etc.)
 * `group` — Manage groups for organizing sessions
+* `events` — Stream and emit events on the event bus (for orchestration)
 * `profile` — Manage profiles (separate workspaces)
 * `worktree` — Manage git worktrees for parallel development
 * `tmux` — tmux integration utilities
@@ -391,6 +397,88 @@ Move session to group
 
 
 
+## `aoe events`
+
+Stream and emit events on the event bus (for orchestration)
+
+**Usage:** `aoe events <COMMAND>`
+
+###### **Subcommands:**
+
+* `watch` — Watch new events as they're emitted (live tail)
+* `history` — Read past events from the log
+* `emit` — Emit an event to the bus
+* `daemon` — Run the lifecycle sweeper that auto-emits session.* events on status transitions
+
+
+
+## `aoe events watch`
+
+Watch new events as they're emitted (live tail)
+
+**Usage:** `aoe events watch [OPTIONS]`
+
+###### **Options:**
+
+* `--filter <FILTER>` — Comma-separated list of event types to include (e.g. "session.completed,session.failed")
+* `--group <GROUP>` — Filter to events with this group
+
+
+
+## `aoe events history`
+
+Read past events from the log
+
+**Usage:** `aoe events history [OPTIONS]`
+
+###### **Options:**
+
+* `--since <SINCE>` — Show events since this duration ago (e.g. "1h", "30m", "2d")
+* `--filter <FILTER>` — Comma-separated list of event types to include
+* `--group <GROUP>` — Filter to events with this group
+
+
+
+## `aoe events emit`
+
+Emit an event to the bus
+
+**Usage:** `aoe events emit [OPTIONS] <TYPE>`
+
+###### **Arguments:**
+
+* `<TYPE>` — Event type (e.g. "session.completed", "custom")
+
+###### **Options:**
+
+* `--session-id <SESSION_ID>` — Session ID (for session.* events)
+* `--title <TITLE>` — Session title (for session.* events)
+* `--group <GROUP>` — Group name (for session.* events)
+* `--worktree <WORKTREE>` — Worktree path (for session.* events that have one)
+* `--summary-path <SUMMARY_PATH>` — Path to SUMMARY.md (for session.completed)
+* `--tool <TOOL>` — Tool name (for session.started)
+* `--exit-code <EXIT_CODE>` — Exit code (for session.completed)
+* `--error <ERROR>` — Error message (for session.failed)
+* `--reason <REASON>` — Reason (for session.idle)
+* `--name <NAME>` — For custom events, the event name
+* `--attr <ATTRS>` — For custom events, additional key=value attributes (repeatable)
+
+
+
+## `aoe events daemon`
+
+Run the lifecycle sweeper that auto-emits session.* events on status transitions
+
+**Usage:** `aoe events daemon [OPTIONS]`
+
+###### **Options:**
+
+* `--interval <INTERVAL>` — Poll interval in seconds (default: 2)
+
+  Default value: `2`
+
+
+
 ## `aoe profile`
 
 Manage profiles (separate workspaces)
@@ -419,11 +507,18 @@ List all profiles
 
 Create a new profile
 
-**Usage:** `aoe profile create <NAME>`
+**Usage:** `aoe profile create [OPTIONS] <NAME>`
 
 ###### **Arguments:**
 
 * `<NAME>` — Profile name
+
+###### **Options:**
+
+* `--template <TEMPLATE>` — Pre-configure the profile from a built-in template (e.g., `tpm`). The template's overrides are written to the profile's config.toml
+
+  Possible values: `tpm`
+
 
 
 
