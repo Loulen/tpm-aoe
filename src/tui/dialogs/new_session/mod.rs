@@ -127,10 +127,14 @@ pub struct NewSessionDialog {
     /// Whether to boot the session as the TPM orchestrator. The toggle is
     /// only useful when the selected tool is `claude`; we hide it otherwise.
     pub(super) tpm_mode: bool,
-    /// Whether the TPM toggle is wired up. False when the tpm-workflow plugin
-    /// can't be resolved at all, which keeps the dialog uncluttered for users
-    /// who don't run the orchestrator workflow. Computed once at construction.
+    /// Whether this build surfaces the TPM toggle. In tests we hide the
+    /// toggle so field-index assertions stay valid; in prod this is always
+    /// true and the install popup handles the missing-plugin case.
     pub(super) tpm_available: bool,
+    /// Set to true by the toggle handler when the user tries to enable TPM
+    /// mode but the plugin is not installed. HomeView drains this flag via
+    /// `take_pending_tpm_install_request` and opens the install popup.
+    pub(super) pending_tpm_install_request: bool,
     /// Additional repo paths for multi-repo workspace
     pub(super) workspace_repos: Vec<String>,
     /// Whether the workspace repos list is expanded (editing mode)
@@ -279,19 +283,14 @@ fn handle_editable_list_key(
     }
 }
 
-/// Detect whether the TPM orchestrator prompt is reachable on this machine.
-/// Returns false in tests so we don't break field-index assertions in dialogs
-/// that pre-date this toggle. Production callers (non-test builds) walk the
-/// resolution chain in `crate::tpm::candidate_paths` and report true on any
-/// hit; the dialog uses this to gate the visibility of the TPM checkbox.
+/// Whether this build surfaces the TPM Mode toggle. In tests we hide the
+/// toggle so field-index assertions in `tests.rs` stay valid. In prod we
+/// always show it; the install popup handles the missing-plugin case.
 fn detect_tpm_available() -> bool {
     if cfg!(test) {
         return false;
     }
-    let cwd = std::env::current_dir().ok();
-    crate::tpm::candidate_paths(cwd.as_deref())
-        .iter()
-        .any(|p| p.is_file())
+    true
 }
 
 /// Build label/value pairs for non-default inherited sandbox settings.
@@ -427,6 +426,7 @@ impl NewSessionDialog {
             yolo_mode_default: yolo_mode,
             tpm_mode: false,
             tpm_available,
+            pending_tpm_install_request: false,
             extra_env,
             env_list_expanded: false,
             env_selected_index: 0,
@@ -550,12 +550,21 @@ impl NewSessionDialog {
         crate::agents::get_agent(tool_name).is_some_and(|a| a.host_only)
     }
 
-    /// Whether the TPM toggle should appear in the dialog. Hidden whenever
-    /// the orchestrator prompt isn't installed (so we don't dangle a useless
-    /// option) or the selected tool can't host it.
+    /// Whether the TPM toggle should appear in the dialog. Gated by
+    /// `tpm_available` (only false under `cfg(test)`; see `detect_tpm_available`)
+    /// and by the selected tool being able to host the orchestrator. Missing
+    /// plugin is handled by the install popup, not by hiding the toggle.
     pub(super) fn show_tpm_toggle(&self) -> bool {
         self.tpm_available
             && crate::tpm::validate_tool(&self.available_tools[self.tool_index]).is_ok()
+    }
+
+    pub fn take_pending_tpm_install_request(&mut self) -> bool {
+        std::mem::take(&mut self.pending_tpm_install_request)
+    }
+
+    pub fn set_tpm_mode(&mut self, enabled: bool) {
+        self.tpm_mode = enabled;
     }
 
     /// The field index of the path field (shifts based on whether profile picker is visible)
@@ -673,6 +682,7 @@ impl NewSessionDialog {
             yolo_mode_default: false,
             tpm_mode: false,
             tpm_available: false,
+            pending_tpm_install_request: false,
             extra_env: Vec::new(),
             env_list_expanded: false,
             env_selected_index: 0,
@@ -734,6 +744,7 @@ impl NewSessionDialog {
             yolo_mode_default: false,
             tpm_mode: false,
             tpm_available: false,
+            pending_tpm_install_request: false,
             extra_env: Vec::new(),
             env_list_expanded: false,
             env_selected_index: 0,
@@ -761,6 +772,10 @@ impl NewSessionDialog {
 
     pub fn set_error(&mut self, error: String) {
         self.error_message = Some(error);
+    }
+
+    pub fn set_error_message(&mut self, msg: String) {
+        self.error_message = Some(msg);
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> DialogResult<NewSessionData> {
@@ -1052,7 +1067,12 @@ impl NewSessionDialog {
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ')
                 if self.focused_field == tpm_field =>
             {
-                self.tpm_mode = !self.tpm_mode;
+                if !self.tpm_mode && !crate::tpm::is_installed() {
+                    // Ask HomeView to open the install popup; don't flip yet.
+                    self.pending_tpm_install_request = true;
+                } else {
+                    self.tpm_mode = !self.tpm_mode;
+                }
                 DialogResult::Continue
             }
             _ => {

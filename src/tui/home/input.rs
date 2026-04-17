@@ -11,7 +11,7 @@ use crate::tui::app::Action;
 use crate::tui::dialogs::{
     ConfirmDialog, DeleteDialogConfig, DialogResult, GroupDeleteOptionsDialog, HookTrustAction,
     HooksInstallDialog, InfoDialog, NewSessionData, NewSessionDialog, ProfilePickerAction,
-    RenameDialog, RenameMode, SendMessageDialog, UnifiedDeleteDialog,
+    RenameDialog, RenameMode, SendMessageDialog, TpmPluginInstallDialog, UnifiedDeleteDialog,
 };
 use crate::tui::diff::{DiffAction, DiffView};
 use crate::tui::settings::{SettingsAction, SettingsView};
@@ -178,6 +178,33 @@ impl HomeView {
             return None;
         }
 
+        if let Some(dialog) = &mut self.tpm_plugin_install_dialog {
+            match dialog.handle_key(key) {
+                DialogResult::Continue => {}
+                DialogResult::Cancel => {
+                    self.tpm_plugin_install_dialog = None;
+                    // tpm_mode was never flipped, nothing else to undo.
+                }
+                DialogResult::Submit(_) => {
+                    self.tpm_plugin_install_dialog = None;
+                    match crate::tpm::install() {
+                        Ok(()) => {
+                            if let Some(nd) = self.new_dialog.as_mut() {
+                                nd.set_tpm_mode(true);
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("tpm plugin install failed: {e:#}");
+                            if let Some(nd) = self.new_dialog.as_mut() {
+                                nd.set_error_message(format!("TPM plugin install failed: {}", e));
+                            }
+                        }
+                    }
+                }
+            }
+            return None;
+        }
+
         if let Some(dialog) = &mut self.hook_trust_dialog {
             match dialog.handle_key(key) {
                 DialogResult::Continue => {}
@@ -220,6 +247,13 @@ impl HomeView {
             .new_dialog
             .as_mut()
             .map(|dialog| dialog.handle_key(key));
+
+        if let Some(nd) = self.new_dialog.as_mut() {
+            if nd.take_pending_tpm_install_request() {
+                self.tpm_plugin_install_dialog = Some(TpmPluginInstallDialog::new());
+                return None;
+            }
+        }
 
         if let Some(result) = dialog_result {
             match result {

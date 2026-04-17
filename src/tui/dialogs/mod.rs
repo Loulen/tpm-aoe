@@ -14,6 +14,7 @@ mod profile_picker;
 mod remote;
 mod rename;
 mod send_message;
+mod tpm_plugin_install;
 mod welcome;
 
 pub use changelog::ChangelogDialog;
@@ -30,6 +31,7 @@ pub use profile_picker::{ProfileEntry, ProfilePickerAction, ProfilePickerDialog}
 pub use remote::RemoteDialog;
 pub use rename::{RenameData, RenameDialog, RenameMode};
 pub use send_message::SendMessageDialog;
+pub use tpm_plugin_install::TpmPluginInstallDialog;
 pub use welcome::WelcomeDialog;
 
 pub enum DialogResult<T> {
