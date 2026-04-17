@@ -56,7 +56,8 @@ pub(super) const FIELD_HELP: &[FieldHelp] = &[
     },
     FieldHelp {
         name: "TPM Mode",
-        description: "Orchestrator tier (fast/standard/prod): autonomously spawns sub-sessions.",
+        description:
+            "Orchestrator tier (fast/standard/prod): autonomously spawns sub-sessions. Space to toggle, Ctrl+P to configure tier",
     },
     FieldHelp {
         name: "Worktree",
@@ -1086,7 +1087,9 @@ impl NewSessionDialog {
                 self.yolo_mode = !self.yolo_mode;
                 DialogResult::Continue
             }
-            KeyCode::Char(' ') if self.focused_field == tpm_field => {
+            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ')
+                if self.focused_field == tpm_field =>
+            {
                 if self.tpm_tier.is_none() && !crate::tpm::is_installed() {
                     // Ask HomeView to open the install popup; don't flip yet.
                     self.pending_tpm_install_request = true;
