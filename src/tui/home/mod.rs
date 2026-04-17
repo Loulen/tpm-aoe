@@ -26,7 +26,7 @@ use super::dialogs::RemoteDialog;
 use super::dialogs::{
     ChangelogDialog, ConfirmDialog, GroupDeleteOptionsDialog, HookTrustDialog, HooksInstallDialog,
     InfoDialog, NewSessionData, NewSessionDialog, ProfilePickerDialog, RenameDialog,
-    UnifiedDeleteDialog, WelcomeDialog,
+    TpmPluginInstallDialog, UnifiedDeleteDialog, WelcomeDialog,
 };
 use super::diff::DiffView;
 use super::settings::SettingsView;
@@ -160,6 +160,7 @@ pub struct HomeView {
     pub(super) hooks_install_dialog: Option<HooksInstallDialog>,
     /// Session data pending agent hooks acknowledgment
     pub(super) pending_hooks_install_data: Option<NewSessionData>,
+    pub(super) tpm_plugin_install_dialog: Option<TpmPluginInstallDialog>,
     pub(super) welcome_dialog: Option<WelcomeDialog>,
     pub(super) changelog_dialog: Option<ChangelogDialog>,
     pub(super) info_dialog: Option<InfoDialog>,
@@ -323,6 +324,7 @@ impl HomeView {
             pending_hook_trust_data: None,
             hooks_install_dialog: None,
             pending_hooks_install_data: None,
+            tpm_plugin_install_dialog: None,
             welcome_dialog: None,
             changelog_dialog: None,
             info_dialog: None,
@@ -887,6 +889,7 @@ impl HomeView {
             || self.rename_dialog.is_some()
             || self.hook_trust_dialog.is_some()
             || self.hooks_install_dialog.is_some()
+            || self.tpm_plugin_install_dialog.is_some()
             || self.welcome_dialog.is_some()
             || self.changelog_dialog.is_some()
             || self.info_dialog.is_some()

@@ -774,6 +774,10 @@ impl NewSessionDialog {
         self.error_message = Some(error);
     }
 
+    pub fn set_error_message(&mut self, msg: String) {
+        self.error_message = Some(msg);
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) -> DialogResult<NewSessionData> {
         // When loading, only allow Esc to cancel
         if self.loading {
