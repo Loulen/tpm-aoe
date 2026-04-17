@@ -1065,7 +1065,7 @@ impl NewSessionDialog {
                 self.yolo_mode = !self.yolo_mode;
                 DialogResult::Continue
             }
-            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ')
+            KeyCode::Char(' ')
                 if self.focused_field == tpm_field =>
             {
                 if self.tpm_tier.is_none() && !crate::tpm::is_installed() {
@@ -1075,6 +1075,23 @@ impl NewSessionDialog {
                     self.tpm_tier = None;
                 } else {
                     self.tpm_tier = Some(crate::tpm::TpmTier::Standard);
+                }
+                DialogResult::Continue
+            }
+            KeyCode::Left | KeyCode::Right
+                if self.focused_field == tpm_field =>
+            {
+                if let Some(tier) = self.tpm_tier {
+                    use crate::tpm::TpmTier;
+                    self.tpm_tier = Some(match (tier, key.code) {
+                        (TpmTier::Fast, KeyCode::Right) => TpmTier::Standard,
+                        (TpmTier::Standard, KeyCode::Right) => TpmTier::Prod,
+                        (TpmTier::Prod, KeyCode::Right) => TpmTier::Fast,
+                        (TpmTier::Fast, KeyCode::Left) => TpmTier::Prod,
+                        (TpmTier::Standard, KeyCode::Left) => TpmTier::Fast,
+                        (TpmTier::Prod, KeyCode::Left) => TpmTier::Standard,
+                        _ => tier,
+                    });
                 }
                 DialogResult::Continue
             }

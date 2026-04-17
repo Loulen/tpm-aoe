@@ -1845,7 +1845,7 @@ fn test_create_session_in_all_mode_is_findable() {
         extra_env: Vec::new(),
         extra_args: String::new(),
         command_override: String::new(),
-        tpm_mode: false,
+        tpm_tier: None,
     };
 
     let session_id = view.create_session(data).unwrap();
@@ -2506,7 +2506,7 @@ fn test_apply_creation_results_returns_session_id() {
         extra_env: Vec::new(),
         extra_args: String::new(),
         command_override: String::new(),
-        tpm_mode: false,
+        tpm_tier: None,
     };
 
     // Use the async CreationPoller path (pass None hooks, non-sandbox,
