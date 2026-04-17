@@ -55,6 +55,10 @@ pub(super) const FIELD_HELP: &[FieldHelp] = &[
             "Skip permission prompts for autonomous operation (--dangerously-skip-permissions)",
     },
     FieldHelp {
+        name: "TPM Mode",
+        description: "Orchestrator: autonomously spawns planner/implementer/reviewer sub-sessions.",
+    },
+    FieldHelp {
         name: "Worktree",
         description:
             "Branch name for git worktree (Ctrl+P to configure branch mode and extra repos)",

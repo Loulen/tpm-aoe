@@ -93,17 +93,44 @@ pub fn resolve_orchestrator(repo_root: Option<&Path>) -> Result<PathBuf> {
     ))
 }
 
+/// Preamble prepended to the orchestrator system prompt so Claude treats it
+/// as authoritative over its default behavior.
+///
+/// Without this, `--append-system-prompt` loses to Claude Code's own "be a
+/// helpful coding assistant" defaults — claude reads the orchestrator spec
+/// but still starts implementing when the user sends a task. The preamble
+/// exists to explicitly tell Claude that on first user turn it must
+/// execute the spec's On Activation steps, not treat the message as a
+/// normal coding request.
+///
+/// Kept ASCII + apostrophe-free so the whole string nests cleanly inside
+/// the `bash -lc '... "..." ...'` wrapping that tmux uses to launch the
+/// session — no extra shell escaping required on the call site.
+const TPM_PREAMBLE: &str = "SYSTEM PROMPT OVERRIDE — TPM ORCHESTRATOR MODE.
+
+The instructions that follow override any conflicting guidance in your default system prompt. When the user sends their first message in this session, execute the On Activation steps in the spec below. Do not treat that message as a direct request to write code yourself. You are the orchestrator: your job is to dispatch other sessions via the aoe CLI and coordinate them. You never edit project source code from this session — all code changes happen in sub-sessions you spawn.
+
+---
+
+";
+
 /// Build the shell snippet that should be appended to `extra_args` when
 /// launching `claude` in TPM mode. We use `--append-system-prompt` (rather
 /// than `--system-prompt`) so the orchestrator instructions augment Claude's
-/// default system prompt instead of replacing it.
+/// default system prompt instead of replacing it, then prepend
+/// [`TPM_PREAMBLE`] to give those instructions precedence when they conflict
+/// with the defaults.
 ///
 /// The path is single-quoted to defend against spaces; the orchestrator
 /// content itself is read at session-start time via `cat`, which keeps the
 /// shell snippet short enough for tmux's command line.
 pub fn extra_args_snippet(orchestrator_path: &Path) -> String {
+    // The preamble lives inside the outer double-quoted argument alongside
+    // `$(cat ...)`. Both halves get concatenated by the shell into one
+    // --append-system-prompt value.
     format!(
-        "--append-system-prompt \"$(cat {})\"",
+        "--append-system-prompt \"{}$(cat {})\"",
+        TPM_PREAMBLE,
         shell_single_quote(orchestrator_path.to_string_lossy().as_ref())
     )
 }
@@ -248,6 +275,52 @@ mod tests {
         assert!(snippet.starts_with("--append-system-prompt"));
         assert!(snippet.contains("/tmp/orch.md"));
         assert!(snippet.contains("$(cat"));
+    }
+
+    #[test]
+    fn extra_args_snippet_carries_preamble_before_cat() {
+        // Regression guard: the preamble must live inside the quoted value and
+        // come BEFORE the $(cat …) expansion so Claude reads the override
+        // instructions first, then the orchestrator spec.
+        let snippet = extra_args_snippet(Path::new("/tmp/orch.md"));
+        let preamble_pos = snippet
+            .find("SYSTEM PROMPT OVERRIDE")
+            .expect("preamble should be present");
+        let cat_pos = snippet
+            .find("$(cat")
+            .expect("cat expansion should be present");
+        assert!(
+            preamble_pos < cat_pos,
+            "preamble should precede the cat expansion; got snippet: {}",
+            snippet
+        );
+    }
+
+    #[test]
+    fn preamble_stays_shell_safe() {
+        // The preamble lives inside double-quoted bash context already nested
+        // inside single-quoted `bash -lc '...'`. Any of these characters would
+        // break that nesting or trigger unintended shell expansion.
+        assert!(
+            !TPM_PREAMBLE.contains('"'),
+            "double quote would close the outer arg"
+        );
+        assert!(
+            !TPM_PREAMBLE.contains('\''),
+            "apostrophe would break the outer bash -lc wrapper"
+        );
+        assert!(
+            !TPM_PREAMBLE.contains('`'),
+            "backtick would trigger command substitution"
+        );
+        assert!(
+            !TPM_PREAMBLE.contains('$'),
+            "dollar sign would trigger variable or $(..) expansion"
+        );
+        assert!(
+            !TPM_PREAMBLE.contains('\\'),
+            "backslash would start an escape sequence"
+        );
     }
 
     #[test]

@@ -298,18 +298,26 @@ impl NewSessionDialog {
                 Style::default().fg(theme.dimmed)
             };
 
+            // Label mentions autonomy explicitly — ticking this box will
+            // cause the orchestrator to spawn additional sessions via
+            // `aoe add` on its own. The warning span turns bold when on so
+            // the side-effect is hard to miss.
+            let desc_style = if self.tpm_mode {
+                Style::default().fg(theme.accent)
+            } else {
+                Style::default().fg(theme.dimmed)
+            };
+            let warning_style = if self.tpm_mode {
+                Style::default().fg(theme.accent).bold()
+            } else {
+                Style::default().fg(theme.dimmed)
+            };
             let tpm_line = Line::from(vec![
                 Span::styled("TPM Mode:", tpm_label_style),
                 Span::raw(" "),
                 Span::styled(tpm_checkbox, tpm_checkbox_style),
-                Span::styled(
-                    " Boot session as the TPM orchestrator",
-                    if self.tpm_mode {
-                        Style::default().fg(theme.accent)
-                    } else {
-                        Style::default().fg(theme.dimmed)
-                    },
-                ),
+                Span::styled(" Orchestrator — ", desc_style),
+                Span::styled("autonomously spawns sub-sessions via aoe", warning_style),
             ]);
             frame.render_widget(Paragraph::new(tpm_line), chunks[ci]);
             ci += 1;
@@ -1221,15 +1229,19 @@ impl NewSessionDialog {
     fn render_help_overlay(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let has_tool_selection = self.available_tools.len() > 1;
         let has_sandbox = self.docker_available;
+        let has_tpm_help = self.show_tpm_toggle();
         let show_sandbox_options_help = has_sandbox && self.sandbox_enabled;
 
         let dialog_width: u16 = HELP_DIALOG_WIDTH;
         let has_profile_selection = self.has_profile_selection();
         // Base fields: Title, Path, YOLO, Worktree, Group + close hint
         let base_height: u16 = 17;
+        // TPM help entry runs ~5 lines (description wraps to two lines).
+        let tpm_height: u16 = if has_tpm_help { 5 } else { 0 };
         let dialog_height: u16 = base_height
             + if has_profile_selection { 3 } else { 0 }
             + if has_tool_selection { 3 } else { 0 }
+            + tpm_height
             + if has_sandbox { 3 } else { 0 }
             + if show_sandbox_options_help { 12 } else { 0 };
 
@@ -1260,14 +1272,17 @@ impl NewSessionDialog {
             if idx == 4 && self.selected_tool_always_yolo() {
                 continue; // YOLO (hidden for AlwaysYolo agents)
             }
-            // idx 5 (Worktree) always shown
-            if idx == 6 && !has_sandbox {
+            if idx == 5 && !has_tpm_help {
+                continue; // TPM (hidden when plugin not installed or tool != claude)
+            }
+            // idx 6 (Worktree) always shown
+            if idx == 7 && !has_sandbox {
                 continue; // Sandbox
             }
-            if (7..=8).contains(&idx) && !show_sandbox_options_help {
+            if (8..=9).contains(&idx) && !show_sandbox_options_help {
                 continue; // Image, Env
             }
-            // idx 9 (Group) always shown
+            // idx 10 (Group) always shown
 
             lines.push(Line::from(Span::styled(
                 help.name,

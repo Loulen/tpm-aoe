@@ -89,3 +89,36 @@ aoe events watch --filter session.completed
 The sweeper is wired to start automatically alongside the TUI; you only need
 to run `aoe events daemon` separately if you want to watch events from a
 non-TUI session (e.g. from the orchestrator itself).
+
+## How the TPM toggle wires up the orchestrator
+
+Ticking "TPM Mode" in the new-session dialog (or passing `--tpm` to
+`aoe add`) does three things at session-creation time:
+
+1. Confirms the `tpm-workflow` plugin is installed (walks
+   `$TPM_WORKFLOW_PATH`, then `contrib/tpm-workflow/`, then
+   `~/.claude/plugins/cache/tpm-workflow/tpm-workflow/`).
+2. Confirms the selected tool is `claude` — other tools can't host the
+   orchestrator because the wiring relies on `--append-system-prompt`.
+3. Appends the orchestrator system prompt to the spawned `claude` command.
+   The appended value has two parts:
+   - A short **override preamble** that instructs Claude to prioritize the
+     orchestrator spec over its default system prompt and to treat the
+     user's first message as a task description rather than a direct
+     coding request. Without this, Claude's defaults win and the session
+     just starts implementing.
+   - The plugin's `agents/orchestrator.md`, read at launch via
+     `$(cat <path>)` so any plugin update takes effect on the next session
+     without rebuilding AoE.
+
+Once the session is running, the orchestrator spawns its own child
+sessions via `aoe add` (planner, implementers in parallel worktrees,
+reviewers, merge resolvers). Those sub-sessions get their own personas
+via `--system-prompt` per the plugin's `dispatch-session` skill. The
+events sweeper relays their lifecycle to the orchestrator over the
+events bus.
+
+**Ticking the box opts into an autonomous multi-session workflow.** The
+orchestrator halts for plan approval once (per the spec's Step 2) and
+then runs waves unattended until the feature is done or a sub-session
+fails.
