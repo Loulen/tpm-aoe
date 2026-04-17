@@ -1065,9 +1065,7 @@ impl NewSessionDialog {
                 self.yolo_mode = !self.yolo_mode;
                 DialogResult::Continue
             }
-            KeyCode::Char(' ')
-                if self.focused_field == tpm_field =>
-            {
+            KeyCode::Char(' ') if self.focused_field == tpm_field => {
                 if self.tpm_tier.is_none() && !crate::tpm::is_installed() {
                     // Ask HomeView to open the install popup; don't flip yet.
                     self.pending_tpm_install_request = true;
@@ -1078,9 +1076,7 @@ impl NewSessionDialog {
                 }
                 DialogResult::Continue
             }
-            KeyCode::Left | KeyCode::Right
-                if self.focused_field == tpm_field =>
-            {
+            KeyCode::Left | KeyCode::Right if self.focused_field == tpm_field => {
                 if let Some(tier) = self.tpm_tier {
                     use crate::tpm::TpmTier;
                     self.tpm_tier = Some(match (tier, key.code) {

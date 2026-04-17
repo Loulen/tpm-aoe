@@ -183,7 +183,7 @@ impl HomeView {
                 DialogResult::Continue => {}
                 DialogResult::Cancel => {
                     self.tpm_plugin_install_dialog = None;
-                    // tpm_mode was never flipped, nothing else to undo.
+                    // tpm_tier was never set, nothing else to undo.
                 }
                 DialogResult::Submit(_) => {
                     self.tpm_plugin_install_dialog = None;
