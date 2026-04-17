@@ -320,6 +320,7 @@ pub async fn run(profile: &str, args: AddArgs) -> Result<()> {
             &instance.tool,
             Some(&original_project_path),
             &instance.extra_args,
+            crate::tpm::TpmTier::Standard,
         )?;
     }
 

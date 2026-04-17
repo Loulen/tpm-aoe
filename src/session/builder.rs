@@ -389,8 +389,12 @@ pub fn build_instance(
         // path (not the worktree path), so a `tpm-aoe` checkout's `contrib/`
         // submodule still wins when sessions live in a sibling worktree dir.
         let repo_root = std::path::PathBuf::from(&params.path);
-        instance.extra_args =
-            crate::tpm::build_tpm_extra_args(&params.tool, Some(&repo_root), &instance.extra_args)?;
+        instance.extra_args = crate::tpm::build_tpm_extra_args(
+            &params.tool,
+            Some(&repo_root),
+            &instance.extra_args,
+            crate::tpm::TpmTier::Standard,
+        )?;
     }
 
     if params.sandbox {
