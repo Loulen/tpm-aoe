@@ -389,13 +389,21 @@ last_seen_version = "{}"
     /// Run `aoe <args>` as a subprocess (not in tmux) with the same env
     /// isolation. Returns the `Output` (stdout, stderr, status).
     pub fn run_cli(&self, args: &[&str]) -> Output {
-        Command::new(&self.binary_path)
-            .args(args)
+        self.run_cli_with_env(args, &[])
+    }
+
+    /// Like [`run_cli`] but lets a test inject extra environment variables
+    /// (e.g. `TPM_WORKFLOW_PATH`) on top of the harness's isolated env.
+    pub fn run_cli_with_env(&self, args: &[&str], extra_env: &[(&str, &Path)]) -> Output {
+        let mut cmd = Command::new(&self.binary_path);
+        cmd.args(args)
             .env("HOME", self.home_dir.path())
             .env("XDG_CONFIG_HOME", self.home_dir.path().join(".config"))
-            .env("PATH", self.env_path())
-            .output()
-            .expect("failed to run aoe CLI")
+            .env("PATH", self.env_path());
+        for (k, v) in extra_env {
+            cmd.env(k, v);
+        }
+        cmd.output().expect("failed to run aoe CLI")
     }
 
     /// Path to the isolated home directory for custom test setup.
