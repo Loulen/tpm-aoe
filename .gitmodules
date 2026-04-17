@@ -1,0 +1,3 @@
+[submodule "contrib/tpm-workflow"]
+	path = contrib/tpm-workflow
+	url = git@github.com:Loulen/tpm-workflow.git
