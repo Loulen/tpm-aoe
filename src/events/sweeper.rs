@@ -309,4 +309,37 @@ mod tests {
             _ => panic!(),
         }
     }
+
+    /// Baseline behavior for the auto-sweeper wired into TUI mode: a fresh
+    /// profile with no sessions must complete a sweep without emitting events.
+    /// Guards against accidental "first-tick" emissions if `tracked` is ever
+    /// initialized in a way that fabricates a transition for unseen sessions.
+    #[test]
+    #[serial_test::serial]
+    fn empty_profile_emits_no_events_on_sweep() {
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        std::env::set_var("HOME", temp.path());
+        #[cfg(target_os = "linux")]
+        std::env::set_var("XDG_CONFIG_HOME", temp.path().join(".config"));
+
+        // Touch the storage so the profile dir exists but has zero sessions.
+        let _ = Storage::new("baseline-empty").unwrap();
+
+        let mut tracked = HashMap::new();
+        let emitted = sweep_once("baseline-empty", &mut tracked).unwrap();
+        assert_eq!(
+            emitted, 0,
+            "empty profile should not emit events on first sweep"
+        );
+        assert!(
+            tracked.is_empty(),
+            "empty profile should leave the tracking map empty"
+        );
+
+        // A second sweep with no changes should also stay quiet.
+        let emitted2 = sweep_once("baseline-empty", &mut tracked).unwrap();
+        assert_eq!(emitted2, 0, "second sweep on empty profile should be quiet");
+    }
 }

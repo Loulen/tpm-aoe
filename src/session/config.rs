@@ -45,6 +45,30 @@ pub struct Config {
 
     #[serde(default)]
     pub app_state: AppStateConfig,
+
+    #[serde(default)]
+    pub events: EventsConfig,
+}
+
+/// Event bus configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EventsConfig {
+    /// Whether the lifecycle sweeper auto-starts alongside the TUI. When
+    /// enabled, the TUI spawns a background task that polls session statuses
+    /// and emits typed events on transitions, so the orchestrator does not
+    /// need to run `aoe events daemon` in a separate terminal. Disable this
+    /// if you prefer to manage the sweeper manually or want to avoid the
+    /// 2-second poll while no orchestration is active.
+    #[serde(default = "default_true")]
+    pub sweeper_enabled: bool,
+}
+
+impl Default for EventsConfig {
+    fn default() -> Self {
+        Self {
+            sweeper_enabled: true,
+        }
+    }
 }
 
 /// Session list sort order

@@ -22,8 +22,9 @@ use crossterm::{
 use ratatui::prelude::*;
 use std::io::{self, IsTerminal, Write};
 
+use crate::events;
 use crate::migrations;
-use crate::session::get_update_settings;
+use crate::session::{get_update_settings, resolve_config};
 use crate::update::check_for_update;
 
 pub async fn run(profile: &str, startup_warning: Option<String>) -> Result<()> {
@@ -104,6 +105,11 @@ pub async fn run(profile: &str, startup_warning: Option<String>) -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
+    // Spin up the events sweeper so orchestration consumers (e.g. the TPM
+    // orchestrator) can `aoe events watch` without the user manually running
+    // `aoe events daemon` in another pane. Opt-out via [events] sweeper_enabled.
+    let sweeper_handle = spawn_events_sweeper(profile);
+
     // Create app and run
     let mut app = App::new(profile, available_tools)?;
     if let Some(warning) = startup_warning {
@@ -120,5 +126,30 @@ pub async fn run(profile: &str, startup_warning: Option<String>) -> Result<()> {
     )?;
     terminal.show_cursor()?;
 
+    // Cancel the sweeper; the runtime would tear it down anyway when main
+    // returns, but aborting first avoids a final wakeup writing into a
+    // half-torn-down filesystem path.
+    if let Some(handle) = sweeper_handle {
+        handle.abort();
+    }
+
     result
+}
+
+/// Spawn the events sweeper as a background tokio task if the active profile
+/// has it enabled. Returns the JoinHandle so the caller can abort it on TUI
+/// exit. Returns `None` when disabled in config.
+fn spawn_events_sweeper(profile: &str) -> Option<tokio::task::JoinHandle<()>> {
+    let cfg = resolve_config(profile).unwrap_or_default();
+    if !cfg.events.sweeper_enabled {
+        tracing::debug!("events sweeper disabled by config");
+        return None;
+    }
+    let profile = profile.to_string();
+    Some(tokio::spawn(async move {
+        // The sweeper loop runs forever until aborted. We swallow its Result
+        // because there's no UI surface to show it on, and individual sweep
+        // errors are already logged via `tracing::warn!` inside `run_sweeper`.
+        let _ = events::run_sweeper(profile, std::time::Duration::from_secs(2)).await;
+    }))
 }
