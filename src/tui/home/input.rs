@@ -190,7 +190,7 @@ impl HomeView {
                     match crate::tpm::install() {
                         Ok(()) => {
                             if let Some(nd) = self.new_dialog.as_mut() {
-                                nd.set_tpm_mode(true);
+                                nd.set_tpm_tier(Some(crate::tpm::TpmTier::Standard));
                             }
                         }
                         Err(e) => {
