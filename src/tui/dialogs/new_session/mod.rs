@@ -172,6 +172,9 @@ pub struct NewSessionDialog {
     /// Tool configuration mode (Ctrl+P on tool field)
     pub(super) tool_config_mode: bool,
     pub(super) tool_config_focused_field: usize,
+    /// TPM configuration overlay mode (Ctrl+P on TPM field)
+    pub(super) tpm_config_mode: bool,
+    pub(super) tpm_config_focused_field: usize,
     /// Extra args for the selected tool (loaded from config)
     pub(super) extra_args: Input,
     /// Command override for the selected tool (loaded from config)
@@ -438,6 +441,8 @@ impl NewSessionDialog {
             sandbox_focused_field: 0,
             tool_config_mode: false,
             tool_config_focused_field: 0,
+            tpm_config_mode: false,
+            tpm_config_focused_field: 0,
             extra_args: Input::new(extra_args_value),
             command_override: Input::new(command_override_value),
             error_message: None,
@@ -632,6 +637,8 @@ impl NewSessionDialog {
         self.command_override = Input::new(config.session.resolve_tool_command(selected_tool));
         self.tool_config_mode = false;
         self.tool_config_focused_field = 0;
+        self.tpm_config_mode = false;
+        self.tpm_config_focused_field = 0;
 
         // Reset expanded states
         self.env_list_expanded = false;
@@ -694,6 +701,8 @@ impl NewSessionDialog {
             sandbox_focused_field: 0,
             tool_config_mode: false,
             tool_config_focused_field: 0,
+            tpm_config_mode: false,
+            tpm_config_focused_field: 0,
             extra_args: Input::default(),
             command_override: Input::default(),
             error_message: None,
@@ -756,6 +765,8 @@ impl NewSessionDialog {
             sandbox_focused_field: 0,
             tool_config_mode: false,
             tool_config_focused_field: 0,
+            tpm_config_mode: false,
+            tpm_config_focused_field: 0,
             extra_args: Input::default(),
             command_override: Input::default(),
             error_message: None,
@@ -809,6 +820,11 @@ impl NewSessionDialog {
         // Delegate to worktree config mode handler when active
         if self.worktree_config_mode {
             return self.handle_worktree_config_key(key);
+        }
+
+        // Delegate to TPM config mode handler when active
+        if self.tpm_config_mode {
+            return self.handle_tpm_config_key(key);
         }
 
         if self.confirm_create_dir.is_some() {
@@ -924,6 +940,11 @@ impl NewSessionDialog {
             if self.focused_field == worktree_field && !self.worktree_branch.value().is_empty() {
                 self.worktree_config_mode = true;
                 self.worktree_config_focused_field = 0;
+                return DialogResult::Continue;
+            }
+            if self.focused_field == tpm_field && self.tpm_tier.is_some() {
+                self.tpm_config_mode = true;
+                self.tpm_config_focused_field = 0;
                 return DialogResult::Continue;
             }
             if self.focused_field == sandbox_field && self.sandbox_enabled {
@@ -1073,21 +1094,6 @@ impl NewSessionDialog {
                     self.tpm_tier = None;
                 } else {
                     self.tpm_tier = Some(crate::tpm::TpmTier::Standard);
-                }
-                DialogResult::Continue
-            }
-            KeyCode::Left | KeyCode::Right if self.focused_field == tpm_field => {
-                if let Some(tier) = self.tpm_tier {
-                    use crate::tpm::TpmTier;
-                    self.tpm_tier = Some(match (tier, key.code) {
-                        (TpmTier::Fast, KeyCode::Right) => TpmTier::Standard,
-                        (TpmTier::Standard, KeyCode::Right) => TpmTier::Prod,
-                        (TpmTier::Prod, KeyCode::Right) => TpmTier::Fast,
-                        (TpmTier::Fast, KeyCode::Left) => TpmTier::Prod,
-                        (TpmTier::Standard, KeyCode::Left) => TpmTier::Fast,
-                        (TpmTier::Prod, KeyCode::Left) => TpmTier::Standard,
-                        _ => tier,
-                    });
                 }
                 DialogResult::Continue
             }
@@ -1283,6 +1289,37 @@ impl NewSessionDialog {
                 if self.worktree_config_focused_field == WT_NEW_BRANCH =>
             {
                 self.create_new_branch = !self.create_new_branch;
+                DialogResult::Continue
+            }
+            _ => DialogResult::Continue,
+        }
+    }
+
+    /// Handle key events when in TPM configuration mode.
+    fn handle_tpm_config_key(&mut self, key: KeyEvent) -> DialogResult<NewSessionData> {
+        // TPM config has a single field: tier radio selector
+        match key.code {
+            KeyCode::Esc | KeyCode::Enter => {
+                self.tpm_config_mode = false;
+                DialogResult::Continue
+            }
+            KeyCode::Char('?') => {
+                self.show_help = true;
+                DialogResult::Continue
+            }
+            KeyCode::Left | KeyCode::Right => {
+                if let Some(tier) = self.tpm_tier {
+                    use crate::tpm::TpmTier;
+                    self.tpm_tier = Some(match (tier, key.code) {
+                        (TpmTier::Fast, KeyCode::Right) => TpmTier::Standard,
+                        (TpmTier::Standard, KeyCode::Right) => TpmTier::Prod,
+                        (TpmTier::Prod, KeyCode::Right) => TpmTier::Fast,
+                        (TpmTier::Fast, KeyCode::Left) => TpmTier::Prod,
+                        (TpmTier::Standard, KeyCode::Left) => TpmTier::Fast,
+                        (TpmTier::Prod, KeyCode::Left) => TpmTier::Standard,
+                        _ => tier,
+                    });
+                }
                 DialogResult::Continue
             }
             _ => DialogResult::Continue,
