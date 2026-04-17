@@ -46,6 +46,15 @@ pub const MARKETPLACE_REPO_SLUG: &str = "Loulen/tpm-workflow";
 /// on mismatch rather than silently upgrading (see D-03 in the plan).
 pub const INSTALLED_PLUGINS_SCHEMA_VERSION: u64 = 2;
 
+/// Relative path (from `$HOME`) of the user-scoped Claude Code settings file.
+/// Owns the `enabledPlugins` map that gates plugin activation; separate from
+/// `installed_plugins.json`, which only tracks presence.
+const SETTINGS_REL_PATH: &str = ".claude/settings.json";
+
+/// Plugin instance key used both in `installed_plugins.json` and in
+/// `enabledPlugins`. Shape is `<plugin-name>@<marketplace-name>`.
+const PLUGIN_INSTANCE_KEY: &str = "tpm-workflow@tpm-workflow";
+
 /// Build the ordered list of candidate orchestrator paths. Earlier entries win.
 ///
 /// The resolution chain:
@@ -213,7 +222,41 @@ pub fn install() -> Result<()> {
     let installed_path = plugins_dir.join("installed_plugins.json");
     update_installed_plugins(&installed_path, &cache_dest, &version, sha)?;
 
+    let settings_path = home.join(SETTINGS_REL_PATH);
+    update_user_settings(&settings_path, PLUGIN_INSTANCE_KEY)?;
+
     Ok(())
+}
+
+/// Flip the `enabledPlugins[<key>]` entry to `true` in the user-scoped
+/// settings file, preserving all other fields.
+///
+/// Claude Code tracks plugin presence in `installed_plugins.json` but tracks
+/// activation in `settings.json`, so a fresh install shows up as "installed
+/// but disabled" unless we also write here. Accepting the install popup is
+/// meant as "install AND enable", so we always overwrite to `true`, even if
+/// the user had previously disabled the plugin explicitly.
+fn update_user_settings(path: &Path, plugin_key: &str) -> Result<()> {
+    let mut v = load_json_or(path, || serde_json::json!({}))?;
+    if !v.is_object() {
+        return Err(anyhow!(
+            "{} root is not a JSON object; refusing to overwrite",
+            path.display()
+        ));
+    }
+    let root = v.as_object_mut().expect("object");
+    let enabled = root
+        .entry("enabledPlugins".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    if !enabled.is_object() {
+        return Err(anyhow!(
+            "{}: enabledPlugins is not a JSON object; refusing to overwrite",
+            path.display()
+        ));
+    }
+    let enabled_obj = enabled.as_object_mut().expect("object");
+    enabled_obj.insert(plugin_key.to_string(), serde_json::Value::Bool(true));
+    atomic_write_json(path, &v)
 }
 
 fn clone_or_refresh_marketplace(target: &Path) -> Result<()> {
@@ -844,6 +887,16 @@ mod tests {
         )
         .unwrap();
 
+        // Pre-existing settings.json with an unrelated root key and a sibling
+        // enabledPlugins entry — both must survive the install.
+        let settings_path = home.join(".claude").join("settings.json");
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &settings_path,
+            r#"{"voiceEnabled":true,"enabledPlugins":{"something-else@mkt":false}}"#,
+        )
+        .unwrap();
+
         install().expect("install should succeed against stub marketplace");
 
         let cache_file = home
@@ -887,6 +940,68 @@ mod tests {
 
         // is_installed() should now also be true.
         assert!(is_installed());
+
+        // settings.json: the enable flag is flipped to true, and pre-existing
+        // keys at both the root and inside enabledPlugins survive the write.
+        let settings: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+        assert_eq!(
+            settings.pointer("/enabledPlugins/tpm-workflow@tpm-workflow"),
+            Some(&serde_json::Value::Bool(true)),
+            "settings: enable flag not set for tpm-workflow@tpm-workflow: {}",
+            settings
+        );
+        assert_eq!(
+            settings.pointer("/voiceEnabled"),
+            Some(&serde_json::Value::Bool(true)),
+            "settings: root sentinel voiceEnabled lost: {}",
+            settings
+        );
+        assert_eq!(
+            settings.pointer("/enabledPlugins/something-else@mkt"),
+            Some(&serde_json::Value::Bool(false)),
+            "settings: pre-existing enabledPlugins entry lost: {}",
+            settings
+        );
+    }
+
+    /// AC-06: focused regression — with no pre-existing settings.json, install
+    /// creates the file with exactly the expected shape.
+    #[test]
+    #[serial]
+    fn install_sets_settings_enabled_plugins() {
+        let home_temp = TempDir::new().unwrap();
+        let _home = HomeGuard::set(home_temp.path());
+        let home = home_temp.path();
+
+        let _marketplace = write_stub_marketplace(home, "0.1.0");
+
+        let settings_path = home.join(".claude").join("settings.json");
+        assert!(
+            !settings_path.exists(),
+            "precondition: settings.json must not exist"
+        );
+
+        install().expect("install should succeed against stub marketplace");
+
+        assert!(
+            settings_path.exists(),
+            "settings.json not created at {}",
+            settings_path.display()
+        );
+        let settings: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+
+        let expected = serde_json::json!({
+            "enabledPlugins": {
+                "tpm-workflow@tpm-workflow": true,
+            }
+        });
+        assert_eq!(
+            settings, expected,
+            "settings.json shape mismatch: got {}",
+            settings
+        );
     }
 
     /// AC-05: schema version 3 is rejected with a clear message; neither
