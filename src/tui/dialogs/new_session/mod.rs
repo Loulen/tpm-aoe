@@ -98,6 +98,9 @@ pub struct NewSessionData {
     pub extra_args: String,
     /// Command override for the agent binary (replaces the default binary)
     pub command_override: String,
+    /// Boot the session as the TPM orchestrator (sets the system prompt to
+    /// the bundled orchestrator agent). See `crate::tpm`.
+    pub tpm_mode: bool,
 }
 
 pub struct NewSessionDialog {
@@ -117,6 +120,13 @@ pub struct NewSessionDialog {
     pub(super) docker_available: bool,
     pub(super) yolo_mode: bool,
     pub(super) yolo_mode_default: bool,
+    /// Whether to boot the session as the TPM orchestrator. The toggle is
+    /// only useful when the selected tool is `claude`; we hide it otherwise.
+    pub(super) tpm_mode: bool,
+    /// Whether the TPM toggle is wired up. False when the tpm-workflow plugin
+    /// can't be resolved at all, which keeps the dialog uncluttered for users
+    /// who don't run the orchestrator workflow. Computed once at construction.
+    pub(super) tpm_available: bool,
     /// Additional repo paths for multi-repo workspace
     pub(super) workspace_repos: Vec<String>,
     /// Whether the workspace repos list is expanded (editing mode)
@@ -265,6 +275,21 @@ fn handle_editable_list_key(
     }
 }
 
+/// Detect whether the TPM orchestrator prompt is reachable on this machine.
+/// Returns false in tests so we don't break field-index assertions in dialogs
+/// that pre-date this toggle. Production callers (non-test builds) walk the
+/// resolution chain in `crate::tpm::candidate_paths` and report true on any
+/// hit; the dialog uses this to gate the visibility of the TPM checkbox.
+fn detect_tpm_available() -> bool {
+    if cfg!(test) {
+        return false;
+    }
+    let cwd = std::env::current_dir().ok();
+    crate::tpm::candidate_paths(cwd.as_deref())
+        .iter()
+        .any(|p| p.is_file())
+}
+
 /// Build label/value pairs for non-default inherited sandbox settings.
 fn build_inherited_settings(sandbox: &SandboxConfig) -> Vec<(String, String)> {
     let mut settings = Vec::new();
@@ -362,6 +387,8 @@ impl NewSessionDialog {
             .position(|p| p == profile)
             .unwrap_or(0);
 
+        let tpm_available = detect_tpm_available();
+
         Self {
             profile: profile.to_string(),
             available_profiles,
@@ -394,6 +421,8 @@ impl NewSessionDialog {
             docker_available,
             yolo_mode,
             yolo_mode_default: yolo_mode,
+            tpm_mode: false,
+            tpm_available,
             extra_env,
             env_list_expanded: false,
             env_selected_index: 0,
@@ -517,6 +546,14 @@ impl NewSessionDialog {
         crate::agents::get_agent(tool_name).is_some_and(|a| a.host_only)
     }
 
+    /// Whether the TPM toggle should appear in the dialog. Hidden whenever
+    /// the orchestrator prompt isn't installed (so we don't dangle a useless
+    /// option) or the selected tool can't host it.
+    pub(super) fn show_tpm_toggle(&self) -> bool {
+        self.tpm_available
+            && crate::tpm::validate_tool(&self.available_tools[self.tool_index]).is_ok()
+    }
+
     /// The field index of the path field (shifts based on whether profile picker is visible)
     fn path_field(&self) -> usize {
         if self.has_profile_selection() {
@@ -630,6 +667,8 @@ impl NewSessionDialog {
             docker_available: false,
             yolo_mode: false,
             yolo_mode_default: false,
+            tpm_mode: false,
+            tpm_available: false,
             extra_env: Vec::new(),
             env_list_expanded: false,
             env_selected_index: 0,
@@ -689,6 +728,8 @@ impl NewSessionDialog {
             docker_available: false,
             yolo_mode: false,
             yolo_mode_default: false,
+            tpm_mode: false,
+            tpm_available: false,
             extra_env: Vec::new(),
             env_list_expanded: false,
             env_selected_index: 0,
@@ -812,6 +853,14 @@ impl NewSessionDialog {
             usize::MAX
         };
         let yolo_mode_field = if has_yolo {
+            let f = fi;
+            fi += 1;
+            f
+        } else {
+            usize::MAX
+        };
+        let has_tpm = self.show_tpm_toggle();
+        let tpm_field = if has_tpm {
             let f = fi;
             fi += 1;
             f
@@ -996,11 +1045,18 @@ impl NewSessionDialog {
                 self.yolo_mode = !self.yolo_mode;
                 DialogResult::Continue
             }
+            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ')
+                if self.focused_field == tpm_field =>
+            {
+                self.tpm_mode = !self.tpm_mode;
+                DialogResult::Continue
+            }
             _ => {
                 if self.focused_field != profile_field
                     && self.focused_field != tool_field
                     && self.focused_field != sandbox_field
                     && self.focused_field != yolo_mode_field
+                    && self.focused_field != tpm_field
                 {
                     self.current_input_mut()
                         .handle_event(&crossterm::event::Event::Key(key));
@@ -1360,12 +1416,16 @@ impl NewSessionDialog {
     fn current_input_mut(&mut self) -> &mut Input {
         let has_tool_selection = self.available_tools.len() > 1;
         let has_yolo = !self.selected_tool_always_yolo();
+        let has_tpm = self.show_tpm_toggle();
         let base = if self.has_profile_selection() { 1 } else { 0 };
 
         let is_host_only = self.selected_tool_host_only();
-        // Field layout: [profile], title, path, [tool], [yolo], [worktree], [sandbox], group
+        // Field layout: [profile], title, path, [tool], [yolo], [tpm], [worktree], [sandbox], group
         let mut fi = base + 2 + if has_tool_selection { 1 } else { 0 };
         if has_yolo {
+            fi += 1;
+        }
+        if has_tpm {
             fi += 1;
         }
         let worktree_field = if !is_host_only {
@@ -1448,6 +1508,10 @@ impl NewSessionDialog {
             },
             extra_args: self.extra_args.value().trim().to_string(),
             command_override: self.command_override.value().trim().to_string(),
+            // Only honor the TPM toggle when the field is visible. Otherwise a
+            // stale `true` left over from a previous claude → opencode tool
+            // switch would leak into the spawned session.
+            tpm_mode: self.tpm_mode && self.show_tpm_toggle(),
         })
     }
 

@@ -70,6 +70,12 @@ pub struct AddArgs {
     /// Override the agent binary command
     #[arg(long)]
     cmd_override: Option<String>,
+
+    /// Boot the session as the TPM orchestrator. Requires the `tpm-workflow`
+    /// plugin (or a `TPM_WORKFLOW_PATH` checkout). Currently only compatible
+    /// with the `claude` tool.
+    #[arg(long)]
+    tpm: bool,
 }
 
 pub async fn run(profile: &str, args: AddArgs) -> Result<()> {
@@ -294,6 +300,14 @@ pub async fn run(profile: &str, args: AddArgs) -> Result<()> {
         if !resolved.is_empty() {
             instance.command = resolved;
         }
+    }
+
+    if args.tpm {
+        instance.extra_args = crate::tpm::build_tpm_extra_args(
+            &instance.tool,
+            Some(&original_project_path),
+            &instance.extra_args,
+        )?;
     }
 
     // Handle sandbox setup

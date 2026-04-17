@@ -116,6 +116,7 @@ Add a new session
 * `--trust-hooks` — Automatically trust repository hooks without prompting
 * `--extra-args <EXTRA_ARGS>` — Extra arguments to append after the agent binary
 * `--cmd-override <CMD_OVERRIDE>` — Override the agent binary command
+* `--tpm` — Boot the session as the TPM orchestrator. Requires the `tpm-workflow` plugin (or a `TPM_WORKFLOW_PATH` checkout). Currently only compatible with the `claude` tool
 
 
 

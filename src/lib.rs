@@ -14,5 +14,6 @@ pub mod session;
 pub mod sound;
 pub mod terminal;
 pub mod tmux;
+pub mod tpm;
 pub mod tui;
 pub mod update;

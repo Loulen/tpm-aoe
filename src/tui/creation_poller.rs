@@ -114,6 +114,7 @@ impl CreationPoller {
             extra_args: data.extra_args,
             command_override: data.command_override,
             extra_repo_paths: data.extra_repo_paths,
+            tpm_mode: data.tpm_mode,
         };
 
         let build_result = match builder::build_instance(params, &existing_titles, &profile) {

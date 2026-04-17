@@ -276,6 +276,10 @@ pub async fn create_session(
             extra_args: body.extra_args,
             command_override: body.command_override,
             extra_repo_paths,
+            // The web dashboard does not yet expose the TPM toggle; the
+            // builder treats `false` as "don't inject the orchestrator
+            // prompt", matching the previous behavior.
+            tpm_mode: false,
         };
 
         let build_result = builder::build_instance(params, &title_refs, &profile)?;

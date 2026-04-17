@@ -41,6 +41,7 @@ impl NewSessionDialog {
         let has_sandbox = self.docker_available && !is_host_only;
         let has_worktree = !is_host_only && !self.worktree_branch.value().is_empty();
         let has_yolo = !self.selected_tool_always_yolo();
+        let has_tpm = self.show_tpm_toggle();
         let dialog_width = 80;
 
         // Build constraints dynamically based on visible fields only
@@ -55,6 +56,9 @@ impl NewSessionDialog {
         ]);
         if has_yolo {
             constraints.push(Constraint::Length(2)); // YOLO mode checkbox
+        }
+        if has_tpm {
+            constraints.push(Constraint::Length(2)); // TPM mode checkbox
         }
         if !is_host_only {
             constraints.push(Constraint::Length(2)); // Worktree Branch
@@ -115,6 +119,13 @@ impl NewSessionDialog {
         let title_field = base;
         let mut fi = base + 2 + if has_tool_selection { 1 } else { 0 };
         let yolo_mode_field = if has_yolo {
+            let f = fi;
+            fi += 1;
+            f
+        } else {
+            usize::MAX
+        };
+        let tpm_field = if has_tpm {
             let f = fi;
             fi += 1;
             f
@@ -266,6 +277,41 @@ impl NewSessionDialog {
                 ),
             ]);
             frame.render_widget(Paragraph::new(yolo_line), chunks[ci]);
+            ci += 1;
+        }
+
+        // TPM Mode checkbox (only when the orchestrator prompt is reachable
+        // and the selected tool can host it). Sits between YOLO and Worktree
+        // because the user typically pairs TPM mode with a worktree.
+        if has_tpm {
+            let is_tpm_focused = self.focused_field == tpm_field;
+            let tpm_label_style = if is_tpm_focused {
+                Style::default().fg(theme.accent).underlined()
+            } else {
+                Style::default().fg(theme.text)
+            };
+
+            let tpm_checkbox = if self.tpm_mode { "[x]" } else { "[ ]" };
+            let tpm_checkbox_style = if self.tpm_mode {
+                Style::default().fg(theme.accent).bold()
+            } else {
+                Style::default().fg(theme.dimmed)
+            };
+
+            let tpm_line = Line::from(vec![
+                Span::styled("TPM Mode:", tpm_label_style),
+                Span::raw(" "),
+                Span::styled(tpm_checkbox, tpm_checkbox_style),
+                Span::styled(
+                    " Boot session as the TPM orchestrator",
+                    if self.tpm_mode {
+                        Style::default().fg(theme.accent)
+                    } else {
+                        Style::default().fg(theme.dimmed)
+                    },
+                ),
+            ]);
+            frame.render_widget(Paragraph::new(tpm_line), chunks[ci]);
             ci += 1;
         }
 
