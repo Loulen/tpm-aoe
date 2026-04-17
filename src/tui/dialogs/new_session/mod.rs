@@ -56,7 +56,8 @@ pub(super) const FIELD_HELP: &[FieldHelp] = &[
     },
     FieldHelp {
         name: "TPM Mode",
-        description: "Orchestrator: autonomously spawns planner/implementer/reviewer sub-sessions.",
+        description:
+            "Orchestrator tier (fast/standard/prod): autonomously spawns sub-sessions. Space to toggle, Ctrl+P to configure tier",
     },
     FieldHelp {
         name: "Worktree",
@@ -102,9 +103,9 @@ pub struct NewSessionData {
     pub extra_args: String,
     /// Command override for the agent binary (replaces the default binary)
     pub command_override: String,
-    /// Boot the session as the TPM orchestrator (sets the system prompt to
-    /// the bundled orchestrator agent). See `crate::tpm`.
-    pub tpm_mode: bool,
+    /// Boot the session as the TPM orchestrator at the given tier. `None`
+    /// means TPM mode is off. See `crate::tpm`.
+    pub tpm_tier: Option<crate::tpm::TpmTier>,
 }
 
 pub struct NewSessionDialog {
@@ -124,9 +125,10 @@ pub struct NewSessionDialog {
     pub(super) docker_available: bool,
     pub(super) yolo_mode: bool,
     pub(super) yolo_mode_default: bool,
-    /// Whether to boot the session as the TPM orchestrator. The toggle is
-    /// only useful when the selected tool is `claude`; we hide it otherwise.
-    pub(super) tpm_mode: bool,
+    /// The TPM orchestration tier, or `None` when TPM mode is off. The
+    /// toggle is only useful when the selected tool is `claude`; we hide it
+    /// otherwise.
+    pub(super) tpm_tier: Option<crate::tpm::TpmTier>,
     /// Whether this build surfaces the TPM toggle. In tests we hide the
     /// toggle so field-index assertions stay valid; in prod this is always
     /// true and the install popup handles the missing-plugin case.
@@ -171,6 +173,9 @@ pub struct NewSessionDialog {
     /// Tool configuration mode (Ctrl+P on tool field)
     pub(super) tool_config_mode: bool,
     pub(super) tool_config_focused_field: usize,
+    /// TPM configuration overlay mode (Ctrl+P on TPM field)
+    pub(super) tpm_config_mode: bool,
+    pub(super) tpm_config_focused_field: usize,
     /// Extra args for the selected tool (loaded from config)
     pub(super) extra_args: Input,
     /// Command override for the selected tool (loaded from config)
@@ -424,7 +429,7 @@ impl NewSessionDialog {
             docker_available,
             yolo_mode,
             yolo_mode_default: yolo_mode,
-            tpm_mode: false,
+            tpm_tier: None,
             tpm_available,
             pending_tpm_install_request: false,
             extra_env,
@@ -437,6 +442,8 @@ impl NewSessionDialog {
             sandbox_focused_field: 0,
             tool_config_mode: false,
             tool_config_focused_field: 0,
+            tpm_config_mode: false,
+            tpm_config_focused_field: 0,
             extra_args: Input::new(extra_args_value),
             command_override: Input::new(command_override_value),
             error_message: None,
@@ -563,8 +570,8 @@ impl NewSessionDialog {
         std::mem::take(&mut self.pending_tpm_install_request)
     }
 
-    pub fn set_tpm_mode(&mut self, enabled: bool) {
-        self.tpm_mode = enabled;
+    pub fn set_tpm_tier(&mut self, tier: Option<crate::tpm::TpmTier>) {
+        self.tpm_tier = tier;
     }
 
     /// The field index of the path field (shifts based on whether profile picker is visible)
@@ -631,6 +638,8 @@ impl NewSessionDialog {
         self.command_override = Input::new(config.session.resolve_tool_command(selected_tool));
         self.tool_config_mode = false;
         self.tool_config_focused_field = 0;
+        self.tpm_config_mode = false;
+        self.tpm_config_focused_field = 0;
 
         // Reset expanded states
         self.env_list_expanded = false;
@@ -680,7 +689,7 @@ impl NewSessionDialog {
             docker_available: false,
             yolo_mode: false,
             yolo_mode_default: false,
-            tpm_mode: false,
+            tpm_tier: None,
             tpm_available: false,
             pending_tpm_install_request: false,
             extra_env: Vec::new(),
@@ -693,6 +702,8 @@ impl NewSessionDialog {
             sandbox_focused_field: 0,
             tool_config_mode: false,
             tool_config_focused_field: 0,
+            tpm_config_mode: false,
+            tpm_config_focused_field: 0,
             extra_args: Input::default(),
             command_override: Input::default(),
             error_message: None,
@@ -742,7 +753,7 @@ impl NewSessionDialog {
             docker_available: false,
             yolo_mode: false,
             yolo_mode_default: false,
-            tpm_mode: false,
+            tpm_tier: None,
             tpm_available: false,
             pending_tpm_install_request: false,
             extra_env: Vec::new(),
@@ -755,6 +766,8 @@ impl NewSessionDialog {
             sandbox_focused_field: 0,
             tool_config_mode: false,
             tool_config_focused_field: 0,
+            tpm_config_mode: false,
+            tpm_config_focused_field: 0,
             extra_args: Input::default(),
             command_override: Input::default(),
             error_message: None,
@@ -808,6 +821,11 @@ impl NewSessionDialog {
         // Delegate to worktree config mode handler when active
         if self.worktree_config_mode {
             return self.handle_worktree_config_key(key);
+        }
+
+        // Delegate to TPM config mode handler when active
+        if self.tpm_config_mode {
+            return self.handle_tpm_config_key(key);
         }
 
         if self.confirm_create_dir.is_some() {
@@ -923,6 +941,11 @@ impl NewSessionDialog {
             if self.focused_field == worktree_field && !self.worktree_branch.value().is_empty() {
                 self.worktree_config_mode = true;
                 self.worktree_config_focused_field = 0;
+                return DialogResult::Continue;
+            }
+            if self.focused_field == tpm_field && self.tpm_tier.is_some() {
+                self.tpm_config_mode = true;
+                self.tpm_config_focused_field = 0;
                 return DialogResult::Continue;
             }
             if self.focused_field == sandbox_field && self.sandbox_enabled {
@@ -1067,11 +1090,13 @@ impl NewSessionDialog {
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ')
                 if self.focused_field == tpm_field =>
             {
-                if !self.tpm_mode && !crate::tpm::is_installed() {
+                if self.tpm_tier.is_none() && !crate::tpm::is_installed() {
                     // Ask HomeView to open the install popup; don't flip yet.
                     self.pending_tpm_install_request = true;
+                } else if self.tpm_tier.is_some() {
+                    self.tpm_tier = None;
                 } else {
-                    self.tpm_mode = !self.tpm_mode;
+                    self.tpm_tier = Some(crate::tpm::TpmTier::Standard);
                 }
                 DialogResult::Continue
             }
@@ -1267,6 +1292,37 @@ impl NewSessionDialog {
                 if self.worktree_config_focused_field == WT_NEW_BRANCH =>
             {
                 self.create_new_branch = !self.create_new_branch;
+                DialogResult::Continue
+            }
+            _ => DialogResult::Continue,
+        }
+    }
+
+    /// Handle key events when in TPM configuration mode.
+    fn handle_tpm_config_key(&mut self, key: KeyEvent) -> DialogResult<NewSessionData> {
+        // TPM config has a single field: tier radio selector
+        match key.code {
+            KeyCode::Esc | KeyCode::Enter => {
+                self.tpm_config_mode = false;
+                DialogResult::Continue
+            }
+            KeyCode::Char('?') => {
+                self.show_help = true;
+                DialogResult::Continue
+            }
+            KeyCode::Left | KeyCode::Right => {
+                if let Some(tier) = self.tpm_tier {
+                    use crate::tpm::TpmTier;
+                    self.tpm_tier = Some(match (tier, key.code) {
+                        (TpmTier::Fast, KeyCode::Right) => TpmTier::Standard,
+                        (TpmTier::Standard, KeyCode::Right) => TpmTier::Prod,
+                        (TpmTier::Prod, KeyCode::Right) => TpmTier::Fast,
+                        (TpmTier::Fast, KeyCode::Left) => TpmTier::Prod,
+                        (TpmTier::Standard, KeyCode::Left) => TpmTier::Fast,
+                        (TpmTier::Prod, KeyCode::Left) => TpmTier::Standard,
+                        _ => tier,
+                    });
+                }
                 DialogResult::Continue
             }
             _ => DialogResult::Continue,
@@ -1532,10 +1588,14 @@ impl NewSessionDialog {
             },
             extra_args: self.extra_args.value().trim().to_string(),
             command_override: self.command_override.value().trim().to_string(),
-            // Only honor the TPM toggle when the field is visible. Otherwise a
-            // stale `true` left over from a previous claude → opencode tool
+            // Only honor the TPM tier when the field is visible. Otherwise a
+            // stale value left over from a previous claude → opencode tool
             // switch would leak into the spawned session.
-            tpm_mode: self.tpm_mode && self.show_tpm_toggle(),
+            tpm_tier: if self.show_tpm_toggle() {
+                self.tpm_tier
+            } else {
+                None
+            },
         })
     }
 

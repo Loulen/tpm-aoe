@@ -35,6 +35,12 @@ impl NewSessionDialog {
             return;
         }
 
+        // If in TPM config mode, render that overlay instead
+        if self.tpm_config_mode {
+            self.render_tpm_config(frame, area, theme);
+            return;
+        }
+
         let has_profile_selection = self.has_profile_selection();
         let has_tool_selection = self.available_tools.len() > 1;
         let is_host_only = self.selected_tool_host_only();
@@ -280,9 +286,7 @@ impl NewSessionDialog {
             ci += 1;
         }
 
-        // TPM Mode checkbox (only when the orchestrator prompt is reachable
-        // and the selected tool can host it). Sits between YOLO and Worktree
-        // because the user typically pairs TPM mode with a worktree.
+        // TPM Mode checkbox (like YOLO Mode / Sandbox)
         if has_tpm {
             let is_tpm_focused = self.focused_field == tpm_field;
             let tpm_label_style = if is_tpm_focused {
@@ -291,35 +295,44 @@ impl NewSessionDialog {
                 Style::default().fg(theme.text)
             };
 
-            let tpm_checkbox = if self.tpm_mode { "[x]" } else { "[ ]" };
-            let tpm_checkbox_style = if self.tpm_mode {
+            let is_active = self.tpm_tier.is_some();
+            let checkbox = if is_active { "[x]" } else { "[ ]" };
+            let checkbox_style = if is_active {
                 Style::default().fg(theme.accent).bold()
             } else {
                 Style::default().fg(theme.dimmed)
             };
 
-            // Label mentions autonomy explicitly — ticking this box will
-            // cause the orchestrator to spawn additional sessions via
-            // `aoe add` on its own. The warning span turns bold when on so
-            // the side-effect is hard to miss.
-            let desc_style = if self.tpm_mode {
-                Style::default().fg(theme.accent)
-            } else {
-                Style::default().fg(theme.dimmed)
-            };
-            let warning_style = if self.tpm_mode {
-                Style::default().fg(theme.accent).bold()
-            } else {
-                Style::default().fg(theme.dimmed)
-            };
-            let tpm_line = Line::from(vec![
+            let mut tpm_spans = vec![
                 Span::styled("TPM Mode:", tpm_label_style),
                 Span::raw(" "),
-                Span::styled(tpm_checkbox, tpm_checkbox_style),
-                Span::styled(" Orchestrator — ", desc_style),
-                Span::styled("autonomously spawns sub-sessions via aoe", warning_style),
-            ]);
-            frame.render_widget(Paragraph::new(tpm_line), chunks[ci]);
+                Span::styled(checkbox, checkbox_style),
+            ];
+
+            if is_active {
+                let tier_label = match self.tpm_tier.unwrap() {
+                    crate::tpm::TpmTier::Fast => "fast",
+                    crate::tpm::TpmTier::Standard => "standard",
+                    crate::tpm::TpmTier::Prod => "prod",
+                };
+                tpm_spans.push(Span::styled(
+                    format!(" Orchestrator ({})", tier_label),
+                    Style::default().fg(theme.accent),
+                ));
+                if is_tpm_focused {
+                    tpm_spans.push(Span::styled(
+                        "  (Ctrl+P to configure)",
+                        Style::default().fg(theme.dimmed),
+                    ));
+                }
+            } else {
+                tpm_spans.push(Span::styled(
+                    " Orchestrator",
+                    Style::default().fg(theme.dimmed),
+                ));
+            }
+
+            frame.render_widget(Paragraph::new(Line::from(tpm_spans)), chunks[ci]);
             ci += 1;
         }
 
@@ -519,6 +532,10 @@ impl NewSessionDialog {
                 hint_spans.push(Span::raw(" groups  "));
             }
             if self.focused_field == tool_field {
+                hint_spans.push(Span::styled("C-p", Style::default().fg(theme.hint)));
+                hint_spans.push(Span::raw(" configure  "));
+            }
+            if self.focused_field == tpm_field && self.tpm_tier.is_some() {
                 hint_spans.push(Span::styled("C-p", Style::default().fg(theme.hint)));
                 hint_spans.push(Span::raw(" configure  "));
             }
@@ -961,6 +978,91 @@ impl NewSessionDialog {
 
         if self.dir_picker.is_active() {
             self.dir_picker.render(frame, area, theme);
+        }
+    }
+
+    fn render_tpm_config(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        let dialog_width: u16 = 52;
+
+        let constraints = vec![
+            Constraint::Length(2), // Tier radio selector
+            Constraint::Min(1),    // Hints
+        ];
+
+        let fields_height: u16 = constraints
+            .iter()
+            .map(|c| match c {
+                Constraint::Length(n) => *n,
+                Constraint::Min(n) => *n,
+                _ => 0,
+            })
+            .sum();
+        let dialog_height = fields_height + 4;
+
+        let dialog_area = crate::tui::dialogs::centered_rect(area, dialog_width, dialog_height);
+
+        frame.render_widget(Clear, dialog_area);
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(theme.accent))
+            .title(" TPM Configuration ")
+            .title_style(Style::default().fg(theme.title).bold());
+
+        let inner = block.inner(dialog_area);
+        frame.render_widget(block, dialog_area);
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .margin(1)
+            .constraints(constraints)
+            .split(inner);
+
+        // Tier radio buttons
+        {
+            use crate::tpm::TpmTier;
+            let current = self.tpm_tier.unwrap_or(TpmTier::Standard);
+            let label_style = Style::default().fg(theme.accent).underlined();
+            let mut spans = vec![Span::styled("Tier:", label_style), Span::raw(" ")];
+
+            for (i, (tier, label)) in [
+                (TpmTier::Fast, "fast"),
+                (TpmTier::Standard, "standard"),
+                (TpmTier::Prod, "prod"),
+            ]
+            .iter()
+            .enumerate()
+            {
+                let is_selected = current == *tier;
+                let style = if is_selected {
+                    Style::default().fg(theme.accent).bold()
+                } else {
+                    Style::default().fg(theme.dimmed)
+                };
+                if i > 0 {
+                    spans.push(Span::raw("  "));
+                }
+                spans.push(Span::styled(if is_selected { "● " } else { "○ " }, style));
+                spans.push(Span::styled(*label, style));
+            }
+
+            frame.render_widget(Paragraph::new(Line::from(spans)), chunks[0]);
+        }
+
+        // Hints
+        let hint_spans = vec![
+            Span::styled("←/→", Style::default().fg(theme.hint)),
+            Span::raw(" cycle  "),
+            Span::styled("Enter", Style::default().fg(theme.hint)),
+            Span::raw(" done  "),
+            Span::styled("Esc", Style::default().fg(theme.hint)),
+            Span::raw(" back"),
+        ];
+        frame.render_widget(Paragraph::new(Line::from(hint_spans)), chunks[1]);
+
+        if self.show_help {
+            self.render_help_overlay(frame, area, theme);
         }
     }
 

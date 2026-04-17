@@ -183,14 +183,14 @@ impl HomeView {
                 DialogResult::Continue => {}
                 DialogResult::Cancel => {
                     self.tpm_plugin_install_dialog = None;
-                    // tpm_mode was never flipped, nothing else to undo.
+                    // tpm_tier was never set, nothing else to undo.
                 }
                 DialogResult::Submit(_) => {
                     self.tpm_plugin_install_dialog = None;
                     match crate::tpm::install() {
                         Ok(()) => {
                             if let Some(nd) = self.new_dialog.as_mut() {
-                                nd.set_tpm_mode(true);
+                                nd.set_tpm_tier(Some(crate::tpm::TpmTier::Standard));
                             }
                         }
                         Err(e) => {
