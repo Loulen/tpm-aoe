@@ -74,6 +74,32 @@ aoe
 
 In the TUI: `?` for help, the bottom information bar in the TUI gives all the info you need.
 
+## TPM Workflow Modes
+
+TPM (Task Plan Manager) adds structured code review and QA gates to your sessions. Enable it with `--tpm` in the CLI or the Space toggle in the TUI new-session dialog.
+
+Three tiers control how much review overhead each session gets:
+
+| Tier | Reviewers | Merge gate | QA | Best for |
+|------|-----------|------------|----|----------|
+| **fast** | 1 (adversarial) | none | lightweight | small/low-risk changes, prototypes |
+| **standard** (default) | 3 (Blind Hunter, Edge Case Hunter, Acceptance Auditor) | merge-resolver | full | most everyday work |
+| **prod** | 3 + Principal Engineer (blocking) + End-User Simulator (advisory) | merge-resolver | full | production-critical changes |
+
+**Activation:**
+
+```bash
+# CLI
+aoe add --tpm           # standard (default)
+aoe add --tpm=fast      # fast
+aoe add --tpm=prod      # prod
+
+# Environment variable
+TPM_MODE=prod aoe add --tpm
+```
+
+In the TUI, press **Space** to enable TPM in the new-session dialog, then **Ctrl+P** to open the tier configuration overlay.
+
 ## Documentation
 
 - **[Installation](https://www.agent-of-empires.com/docs/installation/)** -- prerequisites and install methods
