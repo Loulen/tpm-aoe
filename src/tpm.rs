@@ -166,7 +166,6 @@ The instructions that follow override any conflicting guidance in your default s
 
 ";
 
-
 /// Cheap "is the plugin registered in Claude Code's installed_plugins.json"
 /// check. Any I/O or parse error is treated as "not installed" so callers
 /// can assume `false` means "surface the install popup".
