@@ -102,9 +102,9 @@ pub struct NewSessionData {
     pub extra_args: String,
     /// Command override for the agent binary (replaces the default binary)
     pub command_override: String,
-    /// Boot the session as the TPM orchestrator (sets the system prompt to
-    /// the bundled orchestrator agent). See `crate::tpm`.
-    pub tpm_mode: bool,
+    /// Boot the session as the TPM orchestrator at the given tier. `None`
+    /// means TPM mode is off. See `crate::tpm`.
+    pub tpm_tier: Option<crate::tpm::TpmTier>,
 }
 
 pub struct NewSessionDialog {
@@ -124,9 +124,10 @@ pub struct NewSessionDialog {
     pub(super) docker_available: bool,
     pub(super) yolo_mode: bool,
     pub(super) yolo_mode_default: bool,
-    /// Whether to boot the session as the TPM orchestrator. The toggle is
-    /// only useful when the selected tool is `claude`; we hide it otherwise.
-    pub(super) tpm_mode: bool,
+    /// The TPM orchestration tier, or `None` when TPM mode is off. The
+    /// toggle is only useful when the selected tool is `claude`; we hide it
+    /// otherwise.
+    pub(super) tpm_tier: Option<crate::tpm::TpmTier>,
     /// Whether this build surfaces the TPM toggle. In tests we hide the
     /// toggle so field-index assertions stay valid; in prod this is always
     /// true and the install popup handles the missing-plugin case.
@@ -424,7 +425,7 @@ impl NewSessionDialog {
             docker_available,
             yolo_mode,
             yolo_mode_default: yolo_mode,
-            tpm_mode: false,
+            tpm_tier: None,
             tpm_available,
             pending_tpm_install_request: false,
             extra_env,
@@ -563,8 +564,8 @@ impl NewSessionDialog {
         std::mem::take(&mut self.pending_tpm_install_request)
     }
 
-    pub fn set_tpm_mode(&mut self, enabled: bool) {
-        self.tpm_mode = enabled;
+    pub fn set_tpm_tier(&mut self, tier: Option<crate::tpm::TpmTier>) {
+        self.tpm_tier = tier;
     }
 
     /// The field index of the path field (shifts based on whether profile picker is visible)
@@ -680,7 +681,7 @@ impl NewSessionDialog {
             docker_available: false,
             yolo_mode: false,
             yolo_mode_default: false,
-            tpm_mode: false,
+            tpm_tier: None,
             tpm_available: false,
             pending_tpm_install_request: false,
             extra_env: Vec::new(),
@@ -742,7 +743,7 @@ impl NewSessionDialog {
             docker_available: false,
             yolo_mode: false,
             yolo_mode_default: false,
-            tpm_mode: false,
+            tpm_tier: None,
             tpm_available: false,
             pending_tpm_install_request: false,
             extra_env: Vec::new(),
@@ -1067,11 +1068,13 @@ impl NewSessionDialog {
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ')
                 if self.focused_field == tpm_field =>
             {
-                if !self.tpm_mode && !crate::tpm::is_installed() {
+                if self.tpm_tier.is_none() && !crate::tpm::is_installed() {
                     // Ask HomeView to open the install popup; don't flip yet.
                     self.pending_tpm_install_request = true;
+                } else if self.tpm_tier.is_some() {
+                    self.tpm_tier = None;
                 } else {
-                    self.tpm_mode = !self.tpm_mode;
+                    self.tpm_tier = Some(crate::tpm::TpmTier::Standard);
                 }
                 DialogResult::Continue
             }
@@ -1532,10 +1535,14 @@ impl NewSessionDialog {
             },
             extra_args: self.extra_args.value().trim().to_string(),
             command_override: self.command_override.value().trim().to_string(),
-            // Only honor the TPM toggle when the field is visible. Otherwise a
-            // stale `true` left over from a previous claude → opencode tool
+            // Only honor the TPM tier when the field is visible. Otherwise a
+            // stale value left over from a previous claude → opencode tool
             // switch would leak into the spawned session.
-            tpm_mode: self.tpm_mode && self.show_tpm_toggle(),
+            tpm_tier: if self.show_tpm_toggle() {
+                self.tpm_tier
+            } else {
+                None
+            },
         })
     }
 
