@@ -19,8 +19,46 @@
 //! dialog when the user opts into TPM mode without having the plugin on disk.
 
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use anyhow::{anyhow, Context, Result};
+
+/// Tier of TPM orchestration. Controls how the orchestrator dispatches work.
+/// Currently threaded through the call chain without behavioral effect; future
+/// waves will use it to select different orchestration strategies.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TpmTier {
+    Fast,
+    #[default]
+    Standard,
+    Prod,
+}
+
+impl std::fmt::Display for TpmTier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Fast => write!(f, "fast"),
+            Self::Standard => write!(f, "standard"),
+            Self::Prod => write!(f, "prod"),
+        }
+    }
+}
+
+impl FromStr for TpmTier {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "fast" => Ok(Self::Fast),
+            "standard" => Ok(Self::Standard),
+            "prod" => Ok(Self::Prod),
+            other => Err(anyhow!(
+                "unknown TPM tier: `{}`; expected fast, standard, or prod",
+                other
+            )),
+        }
+    }
+}
 
 /// Relative path of the orchestrator system prompt within the plugin.
 /// Used by every entry in [`candidate_paths`].
@@ -558,6 +596,7 @@ pub fn build_tpm_extra_args(
     tool: &str,
     repo_root: Option<&Path>,
     existing_extra_args: &str,
+    _tier: TpmTier,
 ) -> Result<String> {
     validate_tool(tool)?;
     let path = resolve_orchestrator(repo_root)
@@ -573,6 +612,48 @@ mod tests {
     use super::*;
     use serial_test::serial;
     use tempfile::TempDir;
+
+    #[test]
+    fn tpm_tier_default_is_standard() {
+        assert_eq!(TpmTier::default(), TpmTier::Standard);
+    }
+
+    #[test]
+    fn tpm_tier_display_lowercase() {
+        assert_eq!(TpmTier::Fast.to_string(), "fast");
+        assert_eq!(TpmTier::Standard.to_string(), "standard");
+        assert_eq!(TpmTier::Prod.to_string(), "prod");
+    }
+
+    #[test]
+    fn tpm_tier_from_str_lowercase() {
+        assert_eq!("fast".parse::<TpmTier>().unwrap(), TpmTier::Fast);
+        assert_eq!("standard".parse::<TpmTier>().unwrap(), TpmTier::Standard);
+        assert_eq!("prod".parse::<TpmTier>().unwrap(), TpmTier::Prod);
+    }
+
+    #[test]
+    fn tpm_tier_from_str_case_insensitive() {
+        assert_eq!("FAST".parse::<TpmTier>().unwrap(), TpmTier::Fast);
+        assert_eq!("Standard".parse::<TpmTier>().unwrap(), TpmTier::Standard);
+        assert_eq!("PROD".parse::<TpmTier>().unwrap(), TpmTier::Prod);
+        assert_eq!("pRoD".parse::<TpmTier>().unwrap(), TpmTier::Prod);
+    }
+
+    #[test]
+    fn tpm_tier_from_str_unknown_returns_err() {
+        let err = "unknown".parse::<TpmTier>().unwrap_err().to_string();
+        assert!(err.contains("unknown TPM tier"));
+    }
+
+    #[test]
+    fn tpm_tier_display_from_str_roundtrip() {
+        for tier in [TpmTier::Fast, TpmTier::Standard, TpmTier::Prod] {
+            let s = tier.to_string();
+            let parsed: TpmTier = s.parse().unwrap();
+            assert_eq!(parsed, tier);
+        }
+    }
 
     /// RAII guard that overrides `$HOME` for the lifetime of a test and
     /// restores it on drop. Combined with `#[serial]` this keeps our tests
