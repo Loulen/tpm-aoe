@@ -43,6 +43,14 @@ pub struct AddArgs {
     #[arg(short = 'b', long = "new-branch")]
     create_branch: bool,
 
+    /// Base branch to root the new worktree branch at (use with --worktree --new-branch).
+    /// Defaults to the main repo's current HEAD. Set this when the branch you
+    /// want to fork from is not what's checked out in the main repo (typical
+    /// for TPM-orchestrated dispatches where the orchestrator stays on main
+    /// while implementers branch off an integration branch).
+    #[arg(long = "worktree-from")]
+    worktree_from: Option<String>,
+
     /// Additional repositories for multi-repo workspace (use with --worktree)
     #[arg(long = "repo", short = 'r')]
     extra_repos: Vec<PathBuf>,
@@ -160,7 +168,12 @@ pub async fn run(profile: &str, args: AddArgs) -> Result<()> {
             }
 
             println!("Creating worktree at: {}", worktree_path.display());
-            git_wt.create_worktree(branch, &worktree_path, args.create_branch)?;
+            git_wt.create_worktree_from(
+                branch,
+                &worktree_path,
+                args.create_branch,
+                args.worktree_from.as_deref(),
+            )?;
 
             path = worktree_path;
 

@@ -132,6 +132,21 @@ impl GitWorktree {
     }
 
     pub fn create_worktree(&self, branch: &str, path: &Path, create_branch: bool) -> Result<()> {
+        self.create_worktree_from(branch, path, create_branch, None)
+    }
+
+    /// Create a worktree, optionally rooting the new branch at a specific
+    /// `from_branch` instead of the repo's current HEAD. `from_branch` is only
+    /// consulted when `create_branch = true`. The TPM orchestrator uses this
+    /// to ensure implementer worktrees branch off the integration branch, not
+    /// whatever branch happens to be checked out in the main repo.
+    pub fn create_worktree_from(
+        &self,
+        branch: &str,
+        path: &Path,
+        create_branch: bool,
+        from_branch: Option<&str>,
+    ) -> Result<()> {
         if path.exists() {
             return Err(GitError::WorktreeAlreadyExists(path.to_path_buf()));
         }
@@ -143,11 +158,35 @@ impl GitWorktree {
         let repo = open_repo_at(&self.repo_path)?;
 
         if create_branch {
-            // Find a commit to branch from. Try HEAD first, fall back to any
-            // existing branch. Bare repos often have HEAD pointing to a
-            // non-existent default branch (e.g., HEAD -> master but only main
-            // exists), so the fallback is necessary.
-            let commit_oid = if let Ok(head) = repo.head() {
+            // Resolve the starting commit. Precedence:
+            //   1. Explicit `from_branch` (local, then remote-tracking). This
+            //      lets callers pin the base branch deterministically even when
+            //      the main repo's HEAD is pointing elsewhere.
+            //   2. HEAD (pre-existing default).
+            //   3. Any local branch (bare-repo fallback — HEAD may point to a
+            //      branch that doesn't exist, e.g. master → main mismatch).
+            let commit_oid = if let Some(base) = from_branch {
+                let local = repo.find_branch(base, git2::BranchType::Local);
+                if let Ok(b) = local {
+                    b.get().target().ok_or_else(|| {
+                        GitError::WorktreeCommandFailed(format!(
+                            "Base branch '{}' has no target commit",
+                            base
+                        ))
+                    })?
+                } else {
+                    // Try remote-tracking branches (e.g. origin/main).
+                    repo.branches(Some(git2::BranchType::Remote))?
+                        .filter_map(|b| b.ok())
+                        .find_map(|(b, _)| {
+                            let name = b.name().ok().flatten()?;
+                            (name.ends_with(&format!("/{}", base)) || name == base)
+                                .then(|| b.get().target())
+                                .flatten()
+                        })
+                        .ok_or_else(|| GitError::BranchNotFound(base.to_string()))?
+                }
+            } else if let Ok(head) = repo.head() {
                 head.peel_to_commit()?.id()
             } else {
                 repo.branches(Some(git2::BranchType::Local))?
@@ -455,6 +494,82 @@ mod tests {
     fn test_find_main_repo_fails_for_non_git_directory() {
         let dir = TempDir::new().unwrap();
         assert!(GitWorktree::find_main_repo(dir.path()).is_err());
+    }
+
+    #[test]
+    fn test_create_worktree_from_specific_base_branch() {
+        // Regression guard for the TPM bug where implementer worktrees
+        // branched off HEAD (= main) instead of the integration branch,
+        // pulling in unrelated main commits.
+        let (dir, repo) = setup_test_repo();
+        let repo_path = repo.path().parent().unwrap();
+        let sig = git2::Signature::now("Test", "test@example.com").unwrap();
+
+        // Create an integration branch rooted at the initial commit.
+        let initial_commit = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.branch("integration", &initial_commit, false).unwrap();
+        let integration_oid = initial_commit.id();
+
+        // Advance main past integration with an unrelated commit.
+        let tree_id = {
+            let mut index = repo.index().unwrap();
+            let f = dir.path().join("main-only.txt");
+            std::fs::write(&f, "main work").unwrap();
+            index
+                .add_path(std::path::Path::new("main-only.txt"))
+                .unwrap();
+            index.write().unwrap();
+            index.write_tree().unwrap()
+        };
+        let tree = repo.find_tree(tree_id).unwrap();
+        let main_commit = repo
+            .commit(
+                Some("HEAD"),
+                &sig,
+                &sig,
+                "main-only change",
+                &tree,
+                &[&initial_commit],
+            )
+            .unwrap();
+        assert_ne!(
+            main_commit, integration_oid,
+            "test setup: main should have advanced past integration"
+        );
+
+        // Create a new task branch from integration, not from HEAD.
+        let wt_path = dir.path().join("task-worktree");
+        let git_wt = GitWorktree::new(repo_path.to_path_buf()).unwrap();
+        git_wt
+            .create_worktree_from("task-01", &wt_path, true, Some("integration"))
+            .unwrap();
+
+        // The new branch's tip must equal integration's tip, NOT main's tip.
+        let new_branch = repo
+            .find_branch("task-01", git2::BranchType::Local)
+            .unwrap();
+        let new_tip = new_branch.get().target().unwrap();
+        assert_eq!(
+            new_tip, integration_oid,
+            "task-01 should branch off integration; got {new_tip} expected {integration_oid}"
+        );
+        assert_ne!(
+            new_tip, main_commit,
+            "task-01 must NOT have absorbed the main-only commit"
+        );
+    }
+
+    #[test]
+    fn test_create_worktree_from_unknown_base_errors() {
+        let (dir, repo) = setup_test_repo();
+        let repo_path = repo.path().parent().unwrap();
+        let wt_path = dir.path().join("wt");
+        let git_wt = GitWorktree::new(repo_path.to_path_buf()).unwrap();
+        let result = git_wt.create_worktree_from("task-x", &wt_path, true, Some("does-not-exist"));
+        assert!(
+            result.is_err(),
+            "unknown base branch should surface an error, not silently fall back to HEAD"
+        );
     }
 
     #[test]

@@ -27,6 +27,9 @@ impl HomeView {
             tool: data.tool,
             worktree_branch: data.worktree_branch,
             create_new_branch: data.create_new_branch,
+            // The TUI add-session dialog doesn't expose a base-branch input;
+            // HEAD is the right default for interactive use.
+            worktree_from_branch: None,
             sandbox: data.sandbox,
             sandbox_image: data.sandbox_image,
             yolo_mode: data.yolo_mode,

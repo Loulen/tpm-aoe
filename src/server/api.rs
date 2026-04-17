@@ -280,6 +280,8 @@ pub async fn create_session(
             // builder treats `false` as "don't inject the orchestrator
             // prompt", matching the previous behavior.
             tpm_mode: false,
+            // No equivalent in the web API today — defaults to HEAD.
+            worktree_from_branch: None,
         };
 
         let build_result = builder::build_instance(params, &title_refs, &profile)?;

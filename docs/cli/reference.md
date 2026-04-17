@@ -109,6 +109,7 @@ Add a new session
 * `-l`, `--launch` — Launch the session immediately after creating
 * `-w`, `--worktree <WORKTREE_BRANCH>` — Create session in a git worktree for the specified branch
 * `-b`, `--new-branch` — Create a new branch (use with --worktree)
+* `--worktree-from <WORKTREE_FROM>` — Base branch to root the new worktree branch at (use with --worktree --new-branch). Defaults to the main repo's current HEAD. Set this when the branch you want to fork from is not what's checked out in the main repo (typical for TPM-orchestrated dispatches where the orchestrator stays on main while implementers branch off an integration branch)
 * `-r`, `--repo <EXTRA_REPOS>` — Additional repositories for multi-repo workspace (use with --worktree)
 * `-s`, `--sandbox` — Run session in Docker sandbox
 * `--sandbox-image <SANDBOX_IMAGE>` — Custom Docker image for sandbox (implies --sandbox)

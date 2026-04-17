@@ -24,6 +24,12 @@ pub struct InstanceParams {
     pub tool: String,
     pub worktree_branch: Option<String>,
     pub create_new_branch: bool,
+    /// Optional base branch to root the new worktree branch at. Only meaningful
+    /// when `create_new_branch = true`. When `None`, the new branch is rooted
+    /// at the main repo's HEAD (historical default). The TPM orchestrator sets
+    /// this to the integration branch so implementer worktrees don't absorb
+    /// unrelated main commits.
+    pub worktree_from_branch: Option<String>,
     pub sandbox: bool,
     /// The sandbox image to use. Required when sandbox is true.
     pub sandbox_image: String,
@@ -308,7 +314,12 @@ pub fn build_instance(
                     bail!("Worktree already exists at {}", worktree_path.display());
                 }
 
-                git_wt.create_worktree(branch, &worktree_path, true)?;
+                git_wt.create_worktree_from(
+                    branch,
+                    &worktree_path,
+                    true,
+                    params.worktree_from_branch.as_deref(),
+                )?;
 
                 final_path = worktree_path.to_string_lossy().to_string();
                 created_worktree = Some(CreatedWorktree {
