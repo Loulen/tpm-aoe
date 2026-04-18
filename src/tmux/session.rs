@@ -296,6 +296,11 @@ impl Session {
             }
         }
 
+        // Brief pause so the agent's TUI can process the buffered text
+        // before we send Enter — without this, Enter can arrive while the
+        // input handler is still re-mounting after a previous response.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
         // Enter to submit
         Self::tmux_send(&target, &["Enter"])?;
 
