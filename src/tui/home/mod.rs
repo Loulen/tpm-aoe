@@ -3,6 +3,7 @@
 mod input;
 mod operations;
 mod render;
+pub(super) mod state_panel;
 
 #[cfg(test)]
 mod tests;
@@ -227,6 +228,10 @@ pub struct HomeView {
 
     // Resizable list column width (percentage-like units)
     pub(super) list_width: u16,
+
+    // TPM STATE.md panel
+    pub(super) show_state_panel: bool,
+    pub(super) state_panel_cache: state_panel::StatePanelCache,
 }
 
 impl HomeView {
@@ -361,6 +366,8 @@ impl HomeView {
             list_width: user_config
                 .and_then(|c| c.app_state.home_list_width)
                 .unwrap_or(35),
+            show_state_panel: false,
+            state_panel_cache: state_panel::StatePanelCache::default(),
         };
 
         // Clean up orphaned Creating instances from a prior crash
