@@ -27,6 +27,8 @@ pub(in crate::tui) struct StatePanelCache {
     last_poll: Instant,
     /// Resolved path to the STATE.md file (None = not yet resolved).
     resolved_path: Option<PathBuf>,
+    /// Scroll offset for the TUI panel.
+    pub(super) scroll_offset: usize,
 }
 
 impl Default for StatePanelCache {
@@ -36,6 +38,7 @@ impl Default for StatePanelCache {
             content: String::new(),
             last_poll: Instant::now(),
             resolved_path: None,
+            scroll_offset: 0,
         }
     }
 }
@@ -107,9 +110,20 @@ impl StatePanelCache {
         !self.content.is_empty()
     }
 
-    /// Check if a STATE.md exists for the given instance without caching.
+    /// Whether a STATE.md path has been resolved (cached, no filesystem stat).
+    pub(super) fn has_state_file(&self) -> bool {
+        self.resolved_path.is_some()
+    }
+
+    /// Check if a STATE.md exists for the given instance (does filesystem stat).
+    /// Use sparingly; prefer `has_state_file()` for hot paths like rendering.
     pub(super) fn exists_for(inst: &Instance) -> bool {
         Self::resolve_path(inst).is_some()
+    }
+
+    /// Reset scroll offset to zero.
+    pub(super) fn reset_scroll(&mut self) {
+        self.scroll_offset = 0;
     }
 }
 
@@ -119,6 +133,7 @@ pub(in crate::tui) fn render_state_panel(
     area: Rect,
     content: &str,
     theme: &Theme,
+    scroll_offset: usize,
 ) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -132,12 +147,32 @@ pub(in crate::tui) fn render_state_panel(
     frame.render_widget(block, area);
 
     let lines = parse_state_md(content, theme, inner.width as usize);
-
-    // Simple vertical scroll: show as many lines as fit
+    let total = lines.len();
     let visible = inner.height as usize;
-    let display_lines: Vec<Line> = lines.into_iter().take(visible).collect();
+
+    let clamped_offset = scroll_offset.min(total.saturating_sub(visible));
+    let display_lines: Vec<Line> = lines
+        .into_iter()
+        .skip(clamped_offset)
+        .take(visible)
+        .collect();
 
     frame.render_widget(Paragraph::new(display_lines), inner);
+
+    // Truncation indicator when content overflows
+    if total > visible && clamped_offset + visible < total {
+        let indicator = Span::styled(
+            format!(" ▼ {}/{} ", clamped_offset + visible, total),
+            Style::default().fg(theme.dimmed),
+        );
+        let indicator_area = Rect {
+            x: area.x + 2,
+            y: area.y + area.height.saturating_sub(1),
+            width: area.width.saturating_sub(4).min(20),
+            height: 1,
+        };
+        frame.render_widget(Paragraph::new(Line::from(indicator)), indicator_area);
+    }
 }
 
 /// Parse STATE.md markdown into styled ratatui Lines.
@@ -248,13 +283,19 @@ fn parse_state_md(content: &str, theme: &Theme, width: usize) -> Vec<Line<'stati
     lines
 }
 
-/// Check if a table line is a separator (e.g., |---|---|)
+/// Check if a table line is a separator (e.g., |---|---|).
+/// Each cell segment must contain at least 3 dashes.
 fn is_table_separator(line: &str) -> bool {
-    let inner = line.trim_matches('|').trim();
-    !inner.is_empty()
-        && inner
-            .chars()
-            .all(|c| c == '-' || c == '|' || c == ':' || c == ' ')
+    let trimmed = line.trim();
+    let stripped = trimmed.strip_prefix('|').unwrap_or(trimmed);
+    let inner = stripped.strip_suffix('|').unwrap_or(stripped);
+    if inner.is_empty() {
+        return false;
+    }
+    inner.split('|').all(|segment| {
+        let seg = segment.trim().trim_matches(':');
+        seg.len() >= 3 && seg.chars().all(|c| c == '-')
+    })
 }
 
 /// Parse a table row into cells.
@@ -288,9 +329,13 @@ fn compute_table_col_widths(table_lines: &[&str], max_width: usize) -> Vec<usize
         }
     }
 
+    if widths.is_empty() {
+        return widths;
+    }
+
     // Clamp total width
     let total: usize = widths.iter().sum::<usize>() + widths.len().saturating_sub(1) * 3;
-    if total > max_width && !widths.is_empty() {
+    if total > max_width {
         let scale = max_width as f64 / total as f64;
         for w in &mut widths {
             *w = ((*w as f64) * scale).max(3.0) as usize;
@@ -375,12 +420,12 @@ fn status_color_for_cell(text: &str, theme: &Theme) -> Style {
     Style::default().fg(theme.text)
 }
 
-/// Render a line of text with inline status keyword highlighting.
+/// Render a line of plain text (prose, bullets). No status coloring.
 fn render_inline_styled(text: &str, theme: &Theme) -> Line<'static> {
-    // Simple approach: apply status color to the whole line if it contains
-    // a status keyword, otherwise use default text color
-    let style = status_color_for_cell(text, theme);
-    Line::from(Span::styled(text.to_string(), style))
+    Line::from(Span::styled(
+        text.to_string(),
+        Style::default().fg(theme.text),
+    ))
 }
 
 #[cfg(test)]
@@ -392,8 +437,12 @@ mod tests {
         assert!(is_table_separator("|---|---|"));
         assert!(is_table_separator("| --- | --- |"));
         assert!(is_table_separator("|:---|---:|"));
+        assert!(is_table_separator("|:---:|:---:|"));
         assert!(!is_table_separator("| foo | bar |"));
         assert!(!is_table_separator("not a table"));
+        // Requires at least 3 dashes per segment
+        assert!(!is_table_separator("|-|-|"));
+        assert!(!is_table_separator("|--|--|"));
     }
 
     #[test]

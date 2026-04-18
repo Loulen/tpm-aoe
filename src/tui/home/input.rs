@@ -725,17 +725,25 @@ impl HomeView {
                     }
                 }
             }
+            // Scroll the state panel when visible
+            KeyCode::Char('J') if self.show_state_panel => {
+                self.state_panel_cache.scroll_offset =
+                    self.state_panel_cache.scroll_offset.saturating_add(3);
+            }
+            KeyCode::Char('K') if self.show_state_panel => {
+                self.state_panel_cache.scroll_offset =
+                    self.state_panel_cache.scroll_offset.saturating_sub(3);
+            }
             KeyCode::Char('S') => {
-                // Toggle TPM STATE.md panel for the selected session
                 if let Some(id) = self.selected_session.clone() {
                     if let Some(inst) = self.get_instance(&id).cloned() {
                         if super::state_panel::StatePanelCache::exists_for(&inst) {
                             self.show_state_panel = !self.show_state_panel;
                             if self.show_state_panel {
                                 self.state_panel_cache.refresh_if_needed(&inst);
+                                self.state_panel_cache.reset_scroll();
                             }
                         }
-                        // Non-TPM sessions: pressing S does nothing (AC-03)
                     }
                 }
             }
@@ -1051,14 +1059,20 @@ impl HomeView {
         if let Some(item) = self.flat_items.get(self.cursor) {
             match item {
                 Item::Session { id, .. } => {
+                    let changed = self.selected_session.as_deref() != Some(id.as_str());
                     self.selected_session = Some(id.clone());
                     self.selected_group = None;
                     self.selected_group_profile = None;
+                    if changed {
+                        self.show_state_panel = false;
+                        self.state_panel_cache.reset_scroll();
+                    }
                 }
                 Item::Group { path, .. } => {
                     self.selected_session = None;
                     self.selected_group = Some(path.clone());
                     self.selected_group_profile = self.profile_for_cursor(self.cursor);
+                    self.show_state_panel = false;
                 }
             }
         }

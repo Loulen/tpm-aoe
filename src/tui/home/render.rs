@@ -121,11 +121,13 @@ impl HomeView {
                 .split(chunks[1]);
 
             self.render_preview(frame, right_chunks[0], theme);
+            let scroll = self.state_panel_cache.scroll_offset;
             super::state_panel::render_state_panel(
                 frame,
                 right_chunks[1],
-                &self.state_panel_cache.content.clone(),
+                &self.state_panel_cache.content,
                 theme,
+                scroll,
             );
         } else {
             // Refresh cache in background even when panel is hidden (for poll)
@@ -892,17 +894,13 @@ impl HomeView {
             ]);
         }
 
-        // Show S: State hint when a TPM session is selected
-        if let Some(id) = &self.selected_session {
-            if let Some(inst) = self.get_instance(id) {
-                if super::state_panel::StatePanelCache::exists_for(inst) {
-                    spans.extend([
-                        Span::styled("│", sep_style),
-                        Span::styled(" S", key_style),
-                        Span::styled(" State ", desc_style),
-                    ]);
-                }
-            }
+        // Show S: State hint when a TPM session is selected (uses cached path, no fs stat)
+        if self.selected_session.is_some() && self.state_panel_cache.has_state_file() {
+            spans.extend([
+                Span::styled("│", sep_style),
+                Span::styled(" S", key_style),
+                Span::styled(" State ", desc_style),
+            ]);
         }
 
         spans.extend([

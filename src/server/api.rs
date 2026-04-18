@@ -639,6 +639,62 @@ pub async fn session_diff_files(
     }
 }
 
+/// Return the contents of `.tpm/STATE.md` for a session, if it exists.
+pub async fn session_state(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let instances = state.instances.read().await;
+    let inst = match instances.iter().find(|i| i.id == id) {
+        Some(i) => i.clone(),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "not_found", "message": "Session not found"})),
+            )
+                .into_response()
+        }
+    };
+    drop(instances);
+
+    let result = tokio::task::spawn_blocking(move || {
+        let candidates = [
+            inst.worktree_info
+                .as_ref()
+                .map(|wt| std::path::PathBuf::from(&wt.main_repo_path).join(".tpm/STATE.md")),
+            Some(std::path::PathBuf::from(&inst.project_path).join(".tpm/STATE.md")),
+        ];
+        for candidate in candidates.into_iter().flatten() {
+            if let Ok(content) = std::fs::read_to_string(&candidate) {
+                return Some(content);
+            }
+        }
+        None
+    })
+    .await;
+
+    match result {
+        Ok(Some(content)) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"content": content})),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "not_found", "message": "No STATE.md found"})),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!("session_state panicked: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "internal", "message": "Internal server error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
 #[derive(Deserialize)]
 pub struct FileDiffQuery {
     pub path: String,

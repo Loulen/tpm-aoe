@@ -73,7 +73,7 @@ function MarkdownTable({ lines }: { lines: string[] }) {
   const dataLines = lines.filter((l) => !isTableSeparator(l));
   if (dataLines.length === 0) return null;
 
-  const header = parseTableRow(dataLines[0]);
+  const header = parseTableRow(dataLines[0]!);
   const rows = dataLines.slice(1).map(parseTableRow);
 
   return (
@@ -120,18 +120,16 @@ function StateContent({ content }: { content: string }) {
   let i = 0;
 
   while (i < lines.length) {
-    const line = lines[i];
+    const line = lines[i]!;
     const trimmed = line.trim();
 
     // Collect table blocks
     if (trimmed.startsWith("|") && (trimmed.match(/\|/g) ?? []).length >= 2) {
       const tableLines: string[] = [];
-      while (
-        i < lines.length &&
-        lines[i].trim().startsWith("|") &&
-        (lines[i].trim().match(/\|/g) ?? []).length >= 2
-      ) {
-        tableLines.push(lines[i].trim());
+      while (i < lines.length) {
+        const cur = lines[i]!.trim();
+        if (!cur.startsWith("|") || (cur.match(/\|/g) ?? []).length < 2) break;
+        tableLines.push(cur);
         i++;
       }
       elements.push(<MarkdownTable key={elements.length} lines={tableLines} />);

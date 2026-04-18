@@ -7,7 +7,7 @@ use crate::session::config::SortOrder;
 use crate::tui::styles::Theme;
 
 const DIALOG_WIDTH: u16 = 50;
-const DIALOG_HEIGHT: u16 = 39;
+const DIALOG_HEIGHT: u16 = 40;
 #[cfg(test)]
 const BORDER_HEIGHT: u16 = 2;
 #[cfg(test)]
@@ -47,6 +47,7 @@ fn shortcuts() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
                 ("t", "Toggle Agent/Terminal view"),
                 ("c", "Toggle container/host (sandbox)"),
                 ("D", "Diff view (git changes)"),
+                ("S", "TPM state panel (if .tpm)"),
                 ("H/L", "Resize list panel"),
                 ("o", "Cycle sort forward"),
                 ("Ctrl+o", "Cycle sort backward"),
