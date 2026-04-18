@@ -17,6 +17,7 @@ import { SettingsView } from "./components/SettingsView";
 import { HelpOverlay } from "./components/HelpOverlay";
 import { SessionWizard } from "./components/session-wizard/SessionWizard";
 import { Dashboard } from "./components/Dashboard";
+import { StatePanel } from "./components/StatePanel";
 import { LoginPage } from "./components/LoginPage";
 import { AboutModal } from "./components/AboutModal";
 import { CommandPalette } from "./components/command-palette/CommandPalette";
@@ -71,6 +72,7 @@ function AppContent({ loginRequired, onLogout }: { loginRequired: boolean; onLog
   const [showSettings, setShowSettings] = useState(false);
   const [showPalette, setShowPalette] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
+  const [showStatePanel, setShowStatePanel] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(
     () => window.innerWidth >= 768,
   );
@@ -209,6 +211,7 @@ function AppContent({ loginRequired, onLogout }: { loginRequired: boolean; onLog
         },
         onHelp: () => setShowHelp((h) => !h),
         onSettings: () => setShowSettings((s) => !s),
+        onToggleState: () => setShowStatePanel((s) => !s),
         onPalette: () => setShowPalette((p) => !p),
       }),
       [toggleDiff, showPalette],
@@ -251,6 +254,14 @@ function AppContent({ loginRequired, onLogout }: { loginRequired: boolean; onLog
         <ContentSplit
           collapsed={diffCollapsed}
           onToggleCollapse={toggleDiff}
+          statePanel={
+            showStatePanel ? (
+              <StatePanel
+                session={activeSession ?? null}
+                onClose={() => setShowStatePanel(false)}
+              />
+            ) : undefined
+          }
           left={
             <div className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
               <div
@@ -307,6 +318,8 @@ function AppContent({ loginRequired, onLogout }: { loginRequired: boolean; onLog
         loginRequired={loginRequired}
         isOffline={!!error}
         onGoDashboard={handleGoDashboard}
+        onToggleStatePanel={() => setShowStatePanel((s) => !s)}
+        statePanelOpen={showStatePanel}
       />
 
       <div className="flex flex-1 min-h-0">

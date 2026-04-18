@@ -7,6 +7,7 @@ interface ShortcutActions {
   onHelp: () => void;
   onSettings: () => void;
   onPalette: () => void;
+  onToggleState?: () => void;
 }
 
 /**
@@ -58,6 +59,10 @@ export function useKeyboardShortcuts(getActions: () => ShortcutActions) {
         case "s":
           e.preventDefault();
           actions.onSettings();
+          break;
+        case "S":
+          e.preventDefault();
+          actions.onToggleState?.();
           break;
       }
     };

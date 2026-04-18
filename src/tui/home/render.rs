@@ -104,7 +104,44 @@ impl HomeView {
             .split(main_chunks[0]);
 
         self.render_list(frame, chunks[0], theme);
-        self.render_preview(frame, chunks[1], theme);
+
+        // If the state panel is visible, split the right area between preview and state
+        if self.show_state_panel && self.state_panel_cache.has_content() {
+            // Refresh cache for the selected session
+            if let Some(id) = &self.selected_session {
+                if let Some(inst) = self.get_instance(id) {
+                    let inst = inst.clone();
+                    self.state_panel_cache.refresh_if_needed(&inst);
+                }
+            }
+
+            let right_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+                .split(chunks[1]);
+
+            self.render_preview(frame, right_chunks[0], theme);
+            let scroll = self.state_panel_cache.scroll_offset;
+            super::state_panel::render_state_panel(
+                frame,
+                right_chunks[1],
+                &self.state_panel_cache.content,
+                theme,
+                scroll,
+            );
+        } else {
+            // Refresh cache in background even when panel is hidden (for poll)
+            if self.show_state_panel {
+                if let Some(id) = &self.selected_session {
+                    if let Some(inst) = self.get_instance(id) {
+                        let inst = inst.clone();
+                        self.state_panel_cache.refresh_if_needed(&inst);
+                    }
+                }
+            }
+            self.render_preview(frame, chunks[1], theme);
+        }
+
         self.render_status_bar(frame, main_chunks[1], theme);
 
         if let Some(info) = update_info {
@@ -855,6 +892,26 @@ impl HomeView {
                 Span::styled(" d", key_style),
                 Span::styled(" Del ", desc_style),
             ]);
+        }
+
+        // Show S: State hint when a TPM session is selected (uses cached path, no fs stat)
+        if self.selected_session.is_some() && self.state_panel_cache.has_state_file() {
+            if self.show_state_panel {
+                spans.extend([
+                    Span::styled("│", sep_style),
+                    Span::styled(" S", key_style),
+                    Span::styled(" Close ", desc_style),
+                    Span::styled("│", sep_style),
+                    Span::styled(" J/K", key_style),
+                    Span::styled(" Scroll ", desc_style),
+                ]);
+            } else {
+                spans.extend([
+                    Span::styled("│", sep_style),
+                    Span::styled(" S", key_style),
+                    Span::styled(" State ", desc_style),
+                ]);
+            }
         }
 
         spans.extend([

@@ -287,16 +287,40 @@ impl Session {
 
         let target = format!("{}:^.0", self.name);
 
-        let lines: Vec<&str> = text.lines().collect();
-        for (i, line) in lines.iter().enumerate() {
-            Self::tmux_send(&target, &["-l", line])?;
-            if i < lines.len() - 1 {
-                // ESC + CR: what terminals send for Shift+Enter (inserts newline)
-                Self::tmux_send(&target, &["-H", "1b", "0d"])?;
-            }
+        // Use tmux load-buffer + paste-buffer for reliable multiline delivery.
+        // The previous approach (send-keys -l per line + ESC+CR for newlines)
+        // races with the agent's TUI input handler on long messages: keystrokes
+        // arrive faster than the handler processes them, and the final Enter
+        // fires before the text is captured.
+        let tmp = std::env::temp_dir().join(format!("aoe-send-{}.txt", std::process::id()));
+        std::fs::write(&tmp, text)?;
+
+        let load = std::process::Command::new("tmux")
+            .args(["load-buffer", "-b", "aoe-paste"])
+            .arg(&tmp)
+            .output()?;
+        if !load.status.success() {
+            let _ = std::fs::remove_file(&tmp);
+            bail!(
+                "Failed to load buffer: {}",
+                String::from_utf8_lossy(&load.stderr)
+            );
         }
 
-        // Enter to submit
+        // -p wraps in bracket-paste escape sequences so the agent's TUI
+        // treats newlines as literal text, not as Enter (submit).
+        let paste = std::process::Command::new("tmux")
+            .args(["paste-buffer", "-p", "-b", "aoe-paste", "-d", "-t", &target])
+            .output()?;
+        let _ = std::fs::remove_file(&tmp);
+        if !paste.status.success() {
+            bail!(
+                "Failed to paste buffer: {}",
+                String::from_utf8_lossy(&paste.stderr)
+            );
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(100));
         Self::tmux_send(&target, &["Enter"])?;
 
         Ok(())
