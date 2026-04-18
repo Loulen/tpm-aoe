@@ -896,11 +896,22 @@ impl HomeView {
 
         // Show S: State hint when a TPM session is selected (uses cached path, no fs stat)
         if self.selected_session.is_some() && self.state_panel_cache.has_state_file() {
-            spans.extend([
-                Span::styled("│", sep_style),
-                Span::styled(" S", key_style),
-                Span::styled(" State ", desc_style),
-            ]);
+            if self.show_state_panel {
+                spans.extend([
+                    Span::styled("│", sep_style),
+                    Span::styled(" S", key_style),
+                    Span::styled(" Close ", desc_style),
+                    Span::styled("│", sep_style),
+                    Span::styled(" J/K", key_style),
+                    Span::styled(" Scroll ", desc_style),
+                ]);
+            } else {
+                spans.extend([
+                    Span::styled("│", sep_style),
+                    Span::styled(" S", key_style),
+                    Span::styled(" State ", desc_style),
+                ]);
+            }
         }
 
         spans.extend([

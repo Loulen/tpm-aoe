@@ -197,26 +197,20 @@ fn parse_state_md(content: &str, theme: &Theme, width: usize) -> Vec<Line<'stati
 
         // Headers (check longest prefix first)
         if let Some(rest) = trimmed.strip_prefix("### ") {
-            lines.push(Line::from(Span::styled(
-                rest.to_string(),
-                Style::default().fg(theme.text).bold().italic(),
-            )));
+            let style = Style::default().fg(theme.text).bold().italic();
+            lines.extend(wrap_line(rest, style, width, "  "));
             i += 1;
             continue;
         }
         if let Some(rest) = trimmed.strip_prefix("## ") {
-            lines.push(Line::from(Span::styled(
-                rest.to_string(),
-                Style::default().fg(theme.title).bold(),
-            )));
+            let style = Style::default().fg(theme.title).bold();
+            lines.extend(wrap_line(rest, style, width, "  "));
             i += 1;
             continue;
         }
         if let Some(rest) = trimmed.strip_prefix("# ") {
-            lines.push(Line::from(Span::styled(
-                rest.to_string(),
-                Style::default().fg(theme.title).bold(),
-            )));
+            let style = Style::default().fg(theme.title).bold();
+            lines.extend(wrap_line(rest, style, width, "  "));
             i += 1;
             continue;
         }
@@ -237,15 +231,10 @@ fn parse_state_md(content: &str, theme: &Theme, width: usize) -> Vec<Line<'stati
             }
 
             let cells = parse_table_row(trimmed);
-            let is_header =
-                i > 0 && i + 1 < raw_lines.len() && is_table_separator(raw_lines[i + 1].trim());
-            // Also treat as header if this is the first row of the table
-            let is_first_row = in_table
-                && (i == 0
-                    || !raw_lines[i - 1].trim().starts_with('|')
-                    || is_table_separator(raw_lines[i - 1].trim()));
+            // A row is a header only if the next line is a separator
+            let is_header = i + 1 < raw_lines.len() && is_table_separator(raw_lines[i + 1].trim());
 
-            let styled_cells = if is_header || is_first_row {
+            let styled_cells = if is_header {
                 render_table_header(&cells, &col_widths, theme)
             } else {
                 render_table_row(&cells, &col_widths, theme)
@@ -272,16 +261,16 @@ fn parse_state_md(content: &str, theme: &Theme, width: usize) -> Vec<Line<'stati
         // Bullet points
         if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
             let bullet_content = &trimmed[2..];
-            lines.push(render_inline_styled(
-                &format!("  \u{2022} {}", bullet_content),
-                theme,
-            ));
+            let text = format!("  \u{2022} {}", bullet_content);
+            let style = Style::default().fg(theme.text);
+            lines.extend(wrap_line(&text, style, width, "    "));
             i += 1;
             continue;
         }
 
-        // Regular text with inline status highlighting
-        lines.push(render_inline_styled(trimmed, theme));
+        // Regular text
+        let style = Style::default().fg(theme.text);
+        lines.extend(wrap_line(trimmed, style, width, ""));
         i += 1;
     }
 
@@ -425,12 +414,55 @@ fn status_color_for_cell(text: &str, theme: &Theme) -> Style {
     Style::default().fg(theme.text)
 }
 
-/// Render a line of plain text (prose, bullets). No status coloring.
-fn render_inline_styled(text: &str, theme: &Theme) -> Line<'static> {
-    Line::from(Span::styled(
-        text.to_string(),
-        Style::default().fg(theme.text),
-    ))
+/// Soft-wrap a single logical line into multiple display Lines.
+/// `indent` is prepended to continuation lines (e.g. "    " for bullets).
+fn wrap_line(text: &str, style: Style, width: usize, indent: &str) -> Vec<Line<'static>> {
+    if width == 0 || text.is_empty() {
+        return vec![Line::from(Span::styled(text.to_string(), style))];
+    }
+
+    let mut result = Vec::new();
+    let mut remaining = text;
+    let mut first = true;
+
+    while !remaining.is_empty() {
+        let max = if first {
+            width
+        } else {
+            width.saturating_sub(indent.len())
+        };
+        if remaining.len() <= max {
+            let line_text = if first {
+                remaining.to_string()
+            } else {
+                format!("{}{}", indent, remaining)
+            };
+            result.push(Line::from(Span::styled(line_text, style)));
+            break;
+        }
+
+        // Find a word boundary to break at
+        let break_at = remaining[..max]
+            .rfind(' ')
+            .map(|pos| pos + 1)
+            .unwrap_or(max);
+
+        let (chunk, rest) = remaining.split_at(break_at);
+        let line_text = if first {
+            chunk.trim_end().to_string()
+        } else {
+            format!("{}{}", indent, chunk.trim_end())
+        };
+        result.push(Line::from(Span::styled(line_text, style)));
+        remaining = rest.trim_start();
+        first = false;
+    }
+
+    if result.is_empty() {
+        result.push(Line::from(Span::styled(String::new(), style)));
+    }
+
+    result
 }
 
 #[cfg(test)]
@@ -506,6 +538,63 @@ mod tests {
         let theme = Theme::default();
         let lines = parse_state_md("", &theme, 80);
         assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn test_wrap_line_short() {
+        let style = Style::default();
+        let result = wrap_line("hello world", style, 80, "");
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn test_wrap_line_long() {
+        let style = Style::default();
+        let result = wrap_line("this is a longer sentence that should wrap", style, 20, "");
+        assert!(result.len() > 1);
+        // Each line should fit within width
+        for line in &result {
+            assert!(line.width() <= 20);
+        }
+    }
+
+    #[test]
+    fn test_wrap_line_with_indent() {
+        let style = Style::default();
+        let result = wrap_line(
+            "  • some bullet text that is long enough to wrap around",
+            style,
+            25,
+            "    ",
+        );
+        assert!(result.len() > 1);
+        // Continuation lines get indented
+        if result.len() > 1 {
+            let second = &result[1];
+            let text = second
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>();
+            assert!(text.starts_with("    "));
+        }
+    }
+
+    #[test]
+    fn test_first_data_row_not_bold() {
+        let content = "| Task | Status |\n|---|---|\n| task-01 | done |\n| task-02 | done |\n";
+        let theme = Theme::default();
+        let lines = parse_state_md(content, &theme, 80);
+        // Header (bold) + 2 data rows (not bold)
+        assert_eq!(lines.len(), 3);
+        // First data row should NOT be bold
+        let first_data = &lines[1];
+        for span in &first_data.spans {
+            assert!(
+                !span.style.add_modifier.contains(Modifier::BOLD),
+                "First data row should not be bold"
+            );
+        }
     }
 
     #[test]
