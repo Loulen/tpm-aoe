@@ -10,6 +10,8 @@ interface Props {
   right: React.ReactNode;
   collapsed: boolean;
   onToggleCollapse: () => void;
+  /** Optional extra panel rendered between left and right (e.g. TPM state panel). */
+  statePanel?: React.ReactNode;
 }
 
 function loadSavedWidth(): number {
@@ -30,6 +32,7 @@ export function ContentSplit({
   right,
   collapsed,
   onToggleCollapse,
+  statePanel,
 }: Props) {
   const [diffWidth, setDiffWidth] = useState(loadSavedWidth);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -88,6 +91,9 @@ export function ContentSplit({
     <div ref={containerRef} className="flex-1 flex min-h-0 overflow-hidden relative">
       {/* Terminal pane */}
       <div className="flex-1 flex flex-col min-w-0 min-h-0">{left}</div>
+
+      {/* Optional state panel (TPM sessions) */}
+      {statePanel}
 
       {!collapsed && (
         <>

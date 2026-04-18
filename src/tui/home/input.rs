@@ -725,6 +725,20 @@ impl HomeView {
                     }
                 }
             }
+            KeyCode::Char('S') => {
+                // Toggle TPM STATE.md panel for the selected session
+                if let Some(id) = self.selected_session.clone() {
+                    if let Some(inst) = self.get_instance(&id).cloned() {
+                        if super::state_panel::StatePanelCache::exists_for(&inst) {
+                            self.show_state_panel = !self.show_state_panel;
+                            if self.show_state_panel {
+                                self.state_panel_cache.refresh_if_needed(&inst);
+                            }
+                        }
+                        // Non-TPM sessions: pressing S does nothing (AC-03)
+                    }
+                }
+            }
             KeyCode::Char('D') => {
                 // Open diff view - requires a selected session
                 let Some(session_id) = &self.selected_session else {
