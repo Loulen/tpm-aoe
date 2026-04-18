@@ -204,18 +204,24 @@ The instructions that follow override any conflicting guidance in your default s
 
 ";
 
-/// Cheap "is the plugin registered in Claude Code's installed_plugins.json"
-/// check. Any I/O or parse error is treated as "not installed" so callers
-/// can assume `false` means "surface the install popup".
-pub fn is_installed() -> bool {
+/// Check whether the plugin is installed, enabled, and at the current
+/// version. Returns `false` if any of these conditions is unmet, which
+/// tells callers to surface the install/upgrade popup.
+pub fn is_ready() -> bool {
     let Some(home) = dirs::home_dir() else {
         return false;
     };
-    let path = home
-        .join(".claude")
-        .join("plugins")
-        .join("installed_plugins.json");
-    is_installed_at(&path)
+    let plugins_dir = home.join(".claude").join("plugins");
+    let installed_path = plugins_dir.join("installed_plugins.json");
+    let settings_path = home.join(SETTINGS_REL_PATH);
+
+    is_ready_at(&installed_path, &settings_path)
+}
+
+fn is_ready_at(installed_path: &Path, settings_path: &Path) -> bool {
+    is_installed_at(installed_path)
+        && is_enabled_at(settings_path)
+        && is_current_version(installed_path)
 }
 
 fn is_installed_at(path: &Path) -> bool {
@@ -229,6 +235,74 @@ fn is_installed_at(path: &Path) -> bool {
         v.pointer("/plugins/tpm-workflow@tpm-workflow"),
         Some(serde_json::Value::Array(arr)) if !arr.is_empty()
     )
+}
+
+fn is_enabled_at(path: &Path) -> bool {
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&contents) else {
+        return false;
+    };
+    matches!(
+        v.pointer(&format!("/enabledPlugins/{}", PLUGIN_INSTANCE_KEY)),
+        Some(serde_json::Value::Bool(true))
+    )
+}
+
+fn is_current_version(installed_path: &Path) -> bool {
+    let Ok(contents) = std::fs::read_to_string(installed_path) else {
+        return false;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&contents) else {
+        return false;
+    };
+    let installed_version = v
+        .pointer("/plugins/tpm-workflow@tpm-workflow/0/version")
+        .and_then(|x| x.as_str())
+        .unwrap_or("");
+    let available_version = available_plugin_version();
+    installed_version == available_version
+}
+
+/// Read the version from the marketplace source (fresh clone or contrib/).
+/// Falls back to the cache if neither is available.
+fn available_plugin_version() -> String {
+    let candidates = available_version_paths();
+    for path in &candidates {
+        if let Ok(contents) = std::fs::read_to_string(path) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&contents) {
+                if let Some(version) = v.pointer("/plugins/0/version").and_then(|x| x.as_str()) {
+                    return version.to_string();
+                }
+            }
+        }
+    }
+    String::new()
+}
+
+fn available_version_paths() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(env_path) = std::env::var(ENV_OVERRIDE) {
+        if !env_path.trim().is_empty() {
+            out.push(
+                PathBuf::from(&env_path)
+                    .join(".claude-plugin")
+                    .join("marketplace.json"),
+            );
+        }
+    }
+    if let Some(home) = dirs::home_dir() {
+        out.push(
+            home.join(".claude")
+                .join("plugins")
+                .join("marketplaces")
+                .join(MARKETPLACE_NAME)
+                .join(".claude-plugin")
+                .join("marketplace.json"),
+        );
+    }
+    out
 }
 
 /// Native install: clone (or refresh) the marketplace repo into
@@ -297,18 +371,22 @@ fn update_user_settings(path: &Path, plugin_key: &str) -> Result<()> {
 }
 
 fn clone_or_refresh_marketplace(target: &Path) -> Result<()> {
+    use std::process::Stdio;
+
     if target.exists() {
-        let status = std::process::Command::new("git")
+        let output = std::process::Command::new("git")
             .arg("-C")
             .arg(target)
             .args(["pull", "--ff-only"])
-            .status();
-        match status {
-            Ok(s) if !s.success() => {
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output();
+        match output {
+            Ok(o) if !o.status.success() => {
                 tracing::warn!(
                     "git pull --ff-only in {} exited with {}; continuing with cached copy",
                     target.display(),
-                    s
+                    o.status
                 );
             }
             Err(e) => {
@@ -326,18 +404,22 @@ fn clone_or_refresh_marketplace(target: &Path) -> Result<()> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create {}", parent.display()))?;
     }
-    let status = std::process::Command::new("git")
+    let output = std::process::Command::new("git")
         .arg("clone")
         .arg(MARKETPLACE_REPO_URL)
         .arg(target)
-        .status()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
         .context("Failed to execute git clone")?;
-    if !status.success() {
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(anyhow!(
-            "git clone {} {} exited with status {}",
+            "git clone {} {} exited with status {}: {}",
             MARKETPLACE_REPO_URL,
             target.display(),
-            status
+            output.status,
+            stderr.trim()
         ));
     }
     Ok(())
@@ -916,6 +998,89 @@ mod tests {
         assert!(!is_installed_at(&path));
     }
 
+    #[test]
+    #[serial]
+    fn is_enabled_checks_settings() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("settings.json");
+
+        assert!(
+            !is_enabled_at(&path),
+            "missing file must report not-enabled"
+        );
+
+        std::fs::write(&path, r#"{"model":"opus"}"#).unwrap();
+        assert!(
+            !is_enabled_at(&path),
+            "no enabledPlugins must report not-enabled"
+        );
+
+        std::fs::write(
+            &path,
+            r#"{"enabledPlugins":{"tpm-workflow@tpm-workflow":false}}"#,
+        )
+        .unwrap();
+        assert!(
+            !is_enabled_at(&path),
+            "explicitly disabled must report not-enabled"
+        );
+
+        std::fs::write(
+            &path,
+            r#"{"enabledPlugins":{"tpm-workflow@tpm-workflow":true}}"#,
+        )
+        .unwrap();
+        assert!(is_enabled_at(&path), "enabled must report true");
+    }
+
+    #[test]
+    #[serial]
+    fn is_ready_requires_installed_and_enabled_and_current() {
+        let dir = TempDir::new().unwrap();
+        let _home = HomeGuard::set(dir.path());
+
+        let installed_path = dir.path().join("installed_plugins.json");
+        let settings_path = dir.path().join("settings.json");
+
+        // Write marketplace source so version check can find the available version
+        let _marketplace = write_stub_marketplace(dir.path(), "0.1.0");
+
+        // Neither file exists
+        assert!(!is_ready_at(&installed_path, &settings_path));
+
+        // Installed but not enabled
+        std::fs::write(
+            &installed_path,
+            r#"{"version":2,"plugins":{"tpm-workflow@tpm-workflow":[{"scope":"user","version":"0.1.0"}]}}"#,
+        )
+        .unwrap();
+        assert!(!is_ready_at(&installed_path, &settings_path));
+
+        // Installed and enabled but wrong version
+        std::fs::write(
+            &installed_path,
+            r#"{"version":2,"plugins":{"tpm-workflow@tpm-workflow":[{"scope":"user","version":"0.0.1"}]}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            &settings_path,
+            r#"{"enabledPlugins":{"tpm-workflow@tpm-workflow":true}}"#,
+        )
+        .unwrap();
+        assert!(
+            !is_ready_at(&installed_path, &settings_path),
+            "stale version must report not-ready"
+        );
+
+        // Installed, enabled, and current version
+        std::fs::write(
+            &installed_path,
+            r#"{"version":2,"plugins":{"tpm-workflow@tpm-workflow":[{"scope":"user","version":"0.1.0"}]}}"#,
+        )
+        .unwrap();
+        assert!(is_ready_at(&installed_path, &settings_path));
+    }
+
     fn write_stub_marketplace(home: &Path, version: &str) -> PathBuf {
         let marketplace = home
             .join(".claude")
@@ -1018,8 +1183,8 @@ mod tests {
             Some(INSTALLED_PLUGINS_SCHEMA_VERSION)
         );
 
-        // is_installed() should now also be true.
-        assert!(is_installed());
+        // is_ready() should now also be true (installed + enabled + current version).
+        assert!(is_ready());
 
         // settings.json: the enable flag is flipped to true, and pre-existing
         // keys at both the root and inside enabledPlugins survive the write.

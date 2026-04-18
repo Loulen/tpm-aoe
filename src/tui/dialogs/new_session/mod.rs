@@ -1090,7 +1090,7 @@ impl NewSessionDialog {
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ')
                 if self.focused_field == tpm_field =>
             {
-                if self.tpm_tier.is_none() && !crate::tpm::is_installed() {
+                if self.tpm_tier.is_none() && !crate::tpm::is_ready() {
                     // Ask HomeView to open the install popup; don't flip yet.
                     self.pending_tpm_install_request = true;
                 } else if self.tpm_tier.is_some() {
