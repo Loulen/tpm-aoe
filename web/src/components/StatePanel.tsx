@@ -54,10 +54,16 @@ function statusClass(text: string): string {
   return "text-text-secondary";
 }
 
-/** Check if a table line is a separator row. */
+/** Check if a table line is a separator row. Each segment must have >= 3 dashes. */
 function isTableSeparator(line: string): boolean {
-  const inner = line.replace(/^\||\|$/g, "").trim();
-  return inner.length > 0 && /^[-|: ]+$/.test(inner);
+  let s = line.trim();
+  if (s.startsWith("|")) s = s.slice(1);
+  if (s.endsWith("|")) s = s.slice(0, -1);
+  if (s.length === 0) return false;
+  return s.split("|").every((seg) => {
+    const trimmed = seg.trim().replace(/^:+|:+$/g, "");
+    return trimmed.length >= 3 && /^-+$/.test(trimmed);
+  });
 }
 
 /** Parse a table row into trimmed cells. */
@@ -187,7 +193,7 @@ function StateContent({ content }: { content: string }) {
       elements.push(
         <div
           key={elements.length}
-          className={`text-xs pl-3 ${statusClass(bulletText)}`}
+          className="text-xs pl-3 text-text-secondary"
         >
           &bull; {bulletText}
         </div>,
@@ -200,7 +206,7 @@ function StateContent({ content }: { content: string }) {
     elements.push(
       <p
         key={elements.length}
-        className={`text-xs ${statusClass(trimmed)}`}
+        className="text-xs text-text-secondary"
       >
         {trimmed}
       </p>,
@@ -216,12 +222,14 @@ export function StatePanel({ session, onClose }: Props) {
   const [loading, setLoading] = useState(true);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  const sessionId = session?.id ?? null;
+
   const poll = useCallback(async () => {
-    if (!session) return;
-    const md = await fetchStateMd(session.id);
+    if (!sessionId) return;
+    const md = await fetchStateMd(sessionId);
     setContent(md);
     setLoading(false);
-  }, [session]);
+  }, [sessionId]);
 
   useEffect(() => {
     setLoading(true);

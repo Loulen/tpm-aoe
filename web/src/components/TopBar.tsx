@@ -18,6 +18,8 @@ interface Props {
   loginRequired: boolean;
   isOffline: boolean;
   onGoDashboard: () => void;
+  onToggleStatePanel?: () => void;
+  statePanelOpen?: boolean;
 }
 
 export function TopBar({
@@ -35,6 +37,8 @@ export function TopBar({
   loginRequired,
   isOffline,
   onGoDashboard,
+  onToggleStatePanel,
+  statePanelOpen,
 }: Props) {
   const repoName =
     activeWorkspace?.projectPath.split("/").filter(Boolean).pop() ?? null;
@@ -123,6 +127,36 @@ export function TopBar({
             <span className="w-1.5 h-1.5 rounded-full bg-status-error animate-pulse" />
             offline
           </span>
+        )}
+
+        {activeWorkspace && activeSession && onToggleStatePanel && (
+          <button
+            onClick={onToggleStatePanel}
+            className={`w-8 h-8 flex items-center justify-center cursor-pointer rounded-md transition-colors hover:bg-surface-700/50 ${
+              statePanelOpen
+                ? "text-brand-500 hover:text-brand-400"
+                : "text-text-dim hover:text-text-secondary"
+            }`}
+            title="Toggle TPM state panel (S)"
+            aria-label="Toggle TPM state panel"
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <line x1="9" y1="3" x2="9" y2="21" />
+              <line x1="13" y1="8" x2="19" y2="8" />
+              <line x1="13" y1="12" x2="19" y2="12" />
+              <line x1="13" y1="16" x2="17" y2="16" />
+            </svg>
+          </button>
         )}
 
         {activeWorkspace && activeSession && (

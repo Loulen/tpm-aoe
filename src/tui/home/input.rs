@@ -735,14 +735,14 @@ impl HomeView {
                     self.state_panel_cache.scroll_offset.saturating_sub(3);
             }
             KeyCode::Char('S') => {
-                if let Some(id) = self.selected_session.clone() {
+                if self.show_state_panel {
+                    self.show_state_panel = false;
+                } else if let Some(id) = self.selected_session.clone() {
                     if let Some(inst) = self.get_instance(&id).cloned() {
                         if super::state_panel::StatePanelCache::exists_for(&inst) {
-                            self.show_state_panel = !self.show_state_panel;
-                            if self.show_state_panel {
-                                self.state_panel_cache.refresh_if_needed(&inst);
-                                self.state_panel_cache.reset_scroll();
-                            }
+                            self.show_state_panel = true;
+                            self.state_panel_cache.refresh_if_needed(&inst);
+                            self.state_panel_cache.reset_scroll();
                         }
                     }
                 }

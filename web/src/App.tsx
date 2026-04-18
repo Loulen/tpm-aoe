@@ -211,6 +211,7 @@ function AppContent({ loginRequired, onLogout }: { loginRequired: boolean; onLog
         },
         onHelp: () => setShowHelp((h) => !h),
         onSettings: () => setShowSettings((s) => !s),
+        onToggleState: () => setShowStatePanel((s) => !s),
         onPalette: () => setShowPalette((p) => !p),
       }),
       [toggleDiff, showPalette],
@@ -317,6 +318,8 @@ function AppContent({ loginRequired, onLogout }: { loginRequired: boolean; onLog
         loginRequired={loginRequired}
         isOffline={!!error}
         onGoDashboard={handleGoDashboard}
+        onToggleStatePanel={() => setShowStatePanel((s) => !s)}
+        statePanelOpen={showStatePanel}
       />
 
       <div className="flex flex-1 min-h-0">

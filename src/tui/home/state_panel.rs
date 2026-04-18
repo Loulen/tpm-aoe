@@ -99,6 +99,11 @@ impl StatePanelCache {
 
         if new_content != self.content {
             self.content = new_content;
+            // Clamp scroll offset to new content length
+            let line_count = self.content.lines().count();
+            if self.scroll_offset > line_count {
+                self.scroll_offset = line_count.saturating_sub(1);
+            }
             true
         } else {
             false
