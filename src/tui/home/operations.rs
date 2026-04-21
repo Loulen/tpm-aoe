@@ -38,6 +38,8 @@ impl HomeView {
             command_override: data.command_override,
             extra_repo_paths: data.extra_repo_paths,
             tpm_tier: data.tpm_tier,
+            tpm_review_passes: data.tpm_review_passes,
+            tpm_disabled_agents: data.tpm_disabled_agents,
         };
 
         let build_result = builder::build_instance(params, &existing_titles, &target_profile)?;

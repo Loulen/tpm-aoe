@@ -982,11 +982,15 @@ impl NewSessionDialog {
     }
 
     fn render_tpm_config(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
-        let dialog_width: u16 = 52;
+        let dialog_width: u16 = 58;
+        let agent_count = crate::tpm::KNOWN_AGENTS.len() as u16;
 
         let constraints = vec![
-            Constraint::Length(2), // Tier radio selector
-            Constraint::Min(1),    // Hints
+            Constraint::Length(2),           // Tier radio selector
+            Constraint::Length(2),           // Review passes
+            Constraint::Length(1),           // Agents header
+            Constraint::Length(agent_count), // Agent toggles
+            Constraint::Min(1),              // Hints
         ];
 
         let fields_height: u16 = constraints
@@ -1019,12 +1023,18 @@ impl NewSessionDialog {
             .constraints(constraints)
             .split(inner);
 
-        // Tier radio buttons
+        let focused = self.tpm_config_focused_field;
+
+        // 0: Tier radio buttons
         {
             use crate::tpm::TpmTier;
             let current = self.tpm_tier.unwrap_or(TpmTier::Standard);
-            let label_style = Style::default().fg(theme.accent).underlined();
-            let mut spans = vec![Span::styled("Tier:", label_style), Span::raw(" ")];
+            let label_style = if focused == 0 {
+                Style::default().fg(theme.accent).underlined()
+            } else {
+                Style::default().fg(theme.text)
+            };
+            let mut spans = vec![Span::styled("Tier:", label_style), Span::raw("     ")];
 
             for (i, (tier, label)) in [
                 (TpmTier::Fast, "fast"),
@@ -1050,16 +1060,122 @@ impl NewSessionDialog {
             frame.render_widget(Paragraph::new(Line::from(spans)), chunks[0]);
         }
 
-        // Hints
+        // 1: Review passes
+        {
+            let label_style = if focused == 1 {
+                Style::default().fg(theme.accent).underlined()
+            } else {
+                Style::default().fg(theme.text)
+            };
+
+            if let Some(ref input) = self.tpm_review_input {
+                // Editing mode
+                let spans = vec![
+                    Span::styled("Reviews:", label_style),
+                    Span::raw(" "),
+                    Span::styled(
+                        input.value(),
+                        Style::default().fg(theme.accent).underlined(),
+                    ),
+                    Span::styled("_", Style::default().fg(theme.accent)),
+                ];
+                frame.render_widget(Paragraph::new(Line::from(spans)), chunks[1]);
+            } else {
+                let value_str = match self.tpm_review_passes {
+                    Some(n) if n > 0 => n.to_string(),
+                    _ => "tier default".to_string(),
+                };
+                let value_style = if focused == 1 {
+                    Style::default().fg(theme.accent)
+                } else {
+                    Style::default().fg(theme.dimmed)
+                };
+                let spans = vec![
+                    Span::styled("Reviews:", label_style),
+                    Span::raw(" "),
+                    Span::styled(value_str, value_style),
+                ];
+                frame.render_widget(Paragraph::new(Line::from(spans)), chunks[1]);
+            }
+        }
+
+        // 2: Agents header
+        {
+            let header_style = Style::default().fg(theme.text).bold();
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled("Agents:", header_style))),
+                chunks[2],
+            );
+        }
+
+        // 3: Agent toggles
+        {
+            let mut lines: Vec<Line> = Vec::new();
+            for (i, slug) in crate::tpm::KNOWN_AGENTS.iter().enumerate() {
+                let field_idx = 2 + i;
+                let is_implementer = *slug == "implementer";
+                let is_disabled = self.tpm_disabled_agents.iter().any(|a| a == slug);
+                let is_focused = focused == field_idx;
+
+                let checkbox = if is_implementer {
+                    // Implementer is always enabled, shown greyed out
+                    Span::styled("[x] ", Style::default().fg(theme.dimmed))
+                } else if is_disabled {
+                    let style = if is_focused {
+                        Style::default().fg(theme.accent)
+                    } else {
+                        Style::default().fg(theme.dimmed)
+                    };
+                    Span::styled("[ ] ", style)
+                } else {
+                    let style = if is_focused {
+                        Style::default().fg(theme.accent)
+                    } else {
+                        Style::default().fg(theme.text)
+                    };
+                    Span::styled("[x] ", style)
+                };
+
+                let name_style = if is_implementer {
+                    Style::default().fg(theme.dimmed)
+                } else if is_focused {
+                    Style::default().fg(theme.accent).bold()
+                } else if is_disabled {
+                    Style::default().fg(theme.dimmed)
+                } else {
+                    Style::default().fg(theme.text)
+                };
+
+                let suffix = if is_implementer {
+                    Span::styled(" (always on)", Style::default().fg(theme.dimmed))
+                } else {
+                    Span::raw("")
+                };
+
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    checkbox,
+                    Span::styled(*slug, name_style),
+                    suffix,
+                ]));
+            }
+            frame.render_widget(Paragraph::new(lines), chunks[3]);
+        }
+
+        // 4: Hints
         let hint_spans = vec![
+            Span::styled("↑/↓", Style::default().fg(theme.hint)),
+            Span::raw(" navigate  "),
             Span::styled("←/→", Style::default().fg(theme.hint)),
-            Span::raw(" cycle  "),
+            Span::raw(" cycle tier  "),
+            Span::styled("Space", Style::default().fg(theme.hint)),
+            Span::raw(" toggle  "),
             Span::styled("Enter", Style::default().fg(theme.hint)),
-            Span::raw(" done  "),
+            Span::raw(" edit/done  "),
             Span::styled("Esc", Style::default().fg(theme.hint)),
             Span::raw(" back"),
         ];
-        frame.render_widget(Paragraph::new(Line::from(hint_spans)), chunks[1]);
+        frame.render_widget(Paragraph::new(Line::from(hint_spans)), chunks[4]);
 
         if self.show_help {
             self.render_help_overlay(frame, area, theme);

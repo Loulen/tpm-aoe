@@ -279,6 +279,8 @@ pub async fn create_session(
             // The web dashboard does not yet expose TPM tier selection;
             // `None` preserves the previous behavior (no orchestrator prompt).
             tpm_tier: None,
+            tpm_review_passes: None,
+            tpm_disabled_agents: Vec::new(),
             // No equivalent in the web API today — defaults to HEAD.
             worktree_from_branch: None,
         };

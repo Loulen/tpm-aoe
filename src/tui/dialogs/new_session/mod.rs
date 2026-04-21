@@ -56,8 +56,7 @@ pub(super) const FIELD_HELP: &[FieldHelp] = &[
     },
     FieldHelp {
         name: "TPM Mode",
-        description:
-            "Orchestrator tier (fast/standard/prod): autonomously spawns sub-sessions. Space to toggle, Ctrl+P to configure tier",
+        description: "TPM orchestration tier. Space to toggle, Ctrl+P to configure",
     },
     FieldHelp {
         name: "Worktree",
@@ -106,6 +105,10 @@ pub struct NewSessionData {
     /// Boot the session as the TPM orchestrator at the given tier. `None`
     /// means TPM mode is off. See `crate::tpm`.
     pub tpm_tier: Option<crate::tpm::TpmTier>,
+    /// Maximum review/revision cycles (None = use tier default).
+    pub tpm_review_passes: Option<u32>,
+    /// Agent slugs to disable for this TPM session.
+    pub tpm_disabled_agents: Vec<String>,
 }
 
 pub struct NewSessionDialog {
@@ -176,6 +179,12 @@ pub struct NewSessionDialog {
     /// TPM configuration overlay mode (Ctrl+P on TPM field)
     pub(super) tpm_config_mode: bool,
     pub(super) tpm_config_focused_field: usize,
+    /// Maximum review/revision cycles for this TPM session.
+    pub(super) tpm_review_passes: Option<u32>,
+    /// Agent slugs disabled for this TPM session (toggle in overlay).
+    pub(super) tpm_disabled_agents: Vec<String>,
+    /// Text input for editing review passes in the TPM config overlay.
+    pub(super) tpm_review_input: Option<Input>,
     /// Extra args for the selected tool (loaded from config)
     pub(super) extra_args: Input,
     /// Command override for the selected tool (loaded from config)
@@ -444,6 +453,9 @@ impl NewSessionDialog {
             tool_config_focused_field: 0,
             tpm_config_mode: false,
             tpm_config_focused_field: 0,
+            tpm_review_passes: config.tpm.max_review_cycles,
+            tpm_disabled_agents: config.tpm.disabled_agents.clone(),
+            tpm_review_input: None,
             extra_args: Input::new(extra_args_value),
             command_override: Input::new(command_override_value),
             error_message: None,
@@ -640,6 +652,9 @@ impl NewSessionDialog {
         self.tool_config_focused_field = 0;
         self.tpm_config_mode = false;
         self.tpm_config_focused_field = 0;
+        self.tpm_review_passes = config.tpm.max_review_cycles;
+        self.tpm_disabled_agents = config.tpm.disabled_agents.clone();
+        self.tpm_review_input = None;
 
         // Reset expanded states
         self.env_list_expanded = false;
@@ -704,6 +719,9 @@ impl NewSessionDialog {
             tool_config_focused_field: 0,
             tpm_config_mode: false,
             tpm_config_focused_field: 0,
+            tpm_review_passes: None,
+            tpm_disabled_agents: Vec::new(),
+            tpm_review_input: None,
             extra_args: Input::default(),
             command_override: Input::default(),
             error_message: None,
@@ -768,6 +786,9 @@ impl NewSessionDialog {
             tool_config_focused_field: 0,
             tpm_config_mode: false,
             tpm_config_focused_field: 0,
+            tpm_review_passes: None,
+            tpm_disabled_agents: Vec::new(),
+            tpm_review_input: None,
             extra_args: Input::default(),
             command_override: Input::default(),
             error_message: None,
@@ -1299,18 +1320,73 @@ impl NewSessionDialog {
     }
 
     /// Handle key events when in TPM configuration mode.
+    ///
+    /// The overlay has three sections:
+    ///   0: Tier radio selector (Left/Right to cycle)
+    ///   1: Review passes (number input)
+    ///   2+: Agent toggles (Space to toggle, one per known agent)
     fn handle_tpm_config_key(&mut self, key: KeyEvent) -> DialogResult<NewSessionData> {
-        // TPM config has a single field: tier radio selector
+        // If editing review passes number, handle text input first
+        if let Some(ref mut input) = self.tpm_review_input {
+            match key.code {
+                KeyCode::Esc => {
+                    self.tpm_review_input = None;
+                    return DialogResult::Continue;
+                }
+                KeyCode::Enter => {
+                    let text = input.value().trim().to_string();
+                    if text.is_empty() || text == "0" {
+                        self.tpm_review_passes = None;
+                    } else if let Ok(n) = text.parse::<u32>() {
+                        self.tpm_review_passes = Some(n);
+                    }
+                    self.tpm_review_input = None;
+                    return DialogResult::Continue;
+                }
+                _ => {
+                    input.handle_event(&crossterm::event::Event::Key(key));
+                    return DialogResult::Continue;
+                }
+            }
+        }
+
+        // Total fields: 0=tier, 1=review passes, 2..2+N-1=agent toggles
+        let agent_count = crate::tpm::KNOWN_AGENTS.len();
+        let max_field = 2 + agent_count;
+
         match key.code {
-            KeyCode::Esc | KeyCode::Enter => {
+            KeyCode::Esc => {
                 self.tpm_config_mode = false;
+                DialogResult::Continue
+            }
+            KeyCode::Enter => {
+                if self.tpm_config_focused_field == 1 {
+                    // Edit review passes
+                    let current = self.tpm_review_passes.unwrap_or(0);
+                    self.tpm_review_input = Some(Input::new(current.to_string()));
+                } else {
+                    self.tpm_config_mode = false;
+                }
                 DialogResult::Continue
             }
             KeyCode::Char('?') => {
                 self.show_help = true;
                 DialogResult::Continue
             }
-            KeyCode::Left | KeyCode::Right => {
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.tpm_config_focused_field > 0 {
+                    self.tpm_config_focused_field -= 1;
+                }
+                DialogResult::Continue
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.tpm_config_focused_field < max_field - 1 {
+                    self.tpm_config_focused_field += 1;
+                }
+                DialogResult::Continue
+            }
+            KeyCode::Left | KeyCode::Right if self.tpm_config_focused_field == 0 => {
+                // Tier radio selector
                 if let Some(tier) = self.tpm_tier {
                     use crate::tpm::TpmTier;
                     self.tpm_tier = Some(match (tier, key.code) {
@@ -1322,6 +1398,22 @@ impl NewSessionDialog {
                         (TpmTier::Prod, KeyCode::Left) => TpmTier::Standard,
                         _ => tier,
                     });
+                }
+                DialogResult::Continue
+            }
+            KeyCode::Char(' ') if self.tpm_config_focused_field >= 2 => {
+                // Agent toggle
+                let agent_idx = self.tpm_config_focused_field - 2;
+                if agent_idx < agent_count {
+                    let slug = crate::tpm::KNOWN_AGENTS[agent_idx];
+                    // Implementer cannot be disabled
+                    if slug != "implementer" {
+                        if let Some(pos) = self.tpm_disabled_agents.iter().position(|a| a == slug) {
+                            self.tpm_disabled_agents.remove(pos);
+                        } else {
+                            self.tpm_disabled_agents.push(slug.to_string());
+                        }
+                    }
                 }
                 DialogResult::Continue
             }
@@ -1595,6 +1687,16 @@ impl NewSessionDialog {
                 self.tpm_tier
             } else {
                 None
+            },
+            tpm_review_passes: if self.show_tpm_toggle() && self.tpm_tier.is_some() {
+                self.tpm_review_passes
+            } else {
+                None
+            },
+            tpm_disabled_agents: if self.show_tpm_toggle() && self.tpm_tier.is_some() {
+                self.tpm_disabled_agents.clone()
+            } else {
+                Vec::new()
             },
         })
     }

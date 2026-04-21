@@ -22,18 +22,61 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use anyhow::{anyhow, Context, Result};
+use serde::{Deserialize, Serialize};
 
 use crate::session::Instance;
 
 /// Tier of TPM orchestration. Controls how the orchestrator dispatches work.
 /// Currently threaded through the call chain without behavioral effect; future
 /// waves will use it to select different orchestration strategies.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum TpmTier {
     Fast,
     #[default]
     Standard,
     Prod,
+}
+
+/// Known TPM agent slugs. The orchestrator dispatches these sub-sessions;
+/// the implementer is always enabled and cannot be disabled.
+pub const KNOWN_AGENTS: &[&str] = &[
+    "planner",
+    "implementer",
+    "adversarial-reviewer",
+    "blind-hunter",
+    "edge-case-hunter",
+    "acceptance-auditor",
+    "merge-resolver",
+    "qa-validator",
+    "principal-engineer",
+    "end-user-simulator",
+];
+
+/// TPM configuration that controls orchestrator behavior. Persisted to
+/// `.tpm/config.json` at session creation so the orchestrator can read it.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TpmConfig {
+    #[serde(default)]
+    pub tier: TpmTier,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_review_cycles: Option<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disabled_agents: Vec<String>,
+}
+
+/// Write `TpmConfig` as JSON to `.tpm/config.json` in the given project root.
+/// Creates the `.tpm/` directory if it does not exist.
+pub fn write_tpm_config(project_root: &Path, config: &TpmConfig) -> Result<()> {
+    let tpm_dir = project_root.join(".tpm");
+    std::fs::create_dir_all(&tpm_dir)
+        .with_context(|| format!("failed to create {}", tpm_dir.display()))?;
+    let config_path = tpm_dir.join("config.json");
+    let serialized = serde_json::to_string_pretty(config)?;
+    std::fs::write(&config_path, serialized)
+        .with_context(|| format!("failed to write {}", config_path.display()))?;
+    tracing::info!("wrote TPM config to {}", config_path.display());
+    Ok(())
 }
 
 impl std::fmt::Display for TpmTier {

@@ -88,6 +88,18 @@ pub struct AddArgs {
     /// `--tpm=fast` or `--tpm=prod` selects a different tier.
     #[arg(long, num_args = 0..=1, default_missing_value = "standard", value_parser = clap::value_parser!(TpmTier))]
     tpm: Option<TpmTier>,
+
+    /// Maximum number of review/revision cycles for the TPM orchestrator.
+    /// 0 or omitted means use the tier default. Requires `--tpm`.
+    #[arg(long, value_name = "N")]
+    tpm_review_passes: Option<u32>,
+
+    /// Disable a TPM agent by slug. Can be repeated. The implementer agent
+    /// cannot be disabled.
+    ///
+    /// Example: `--tpm-disable-agent principal-engineer --tpm-disable-agent end-user-simulator`
+    #[arg(long = "tpm-disable-agent", value_name = "AGENT", action = clap::ArgAction::Append)]
+    tpm_disabled_agents: Vec<String>,
 }
 
 pub async fn run(profile: &str, args: AddArgs) -> Result<()> {
@@ -326,6 +338,22 @@ pub async fn run(profile: &str, args: AddArgs) -> Result<()> {
             &instance.extra_args,
             tier,
         )?;
+        instance.tpm_managed = true;
+
+        // Filter out "implementer" from disabled agents (always enabled)
+        let disabled: Vec<String> = args
+            .tpm_disabled_agents
+            .iter()
+            .filter(|a| a.as_str() != "implementer")
+            .cloned()
+            .collect();
+
+        let tpm_config = crate::tpm::TpmConfig {
+            tier,
+            max_review_cycles: args.tpm_review_passes.filter(|&n| n > 0),
+            disabled_agents: disabled,
+        };
+        crate::tpm::write_tpm_config(&path, &tpm_config)?;
     }
 
     // Handle sandbox setup
