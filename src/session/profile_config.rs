@@ -828,6 +828,180 @@ mod tests {
         assert_eq!(merged.theme.name, "catppuccin-latte");
     }
 
+    // --- TPM config override tests ---
+
+    #[test]
+    fn test_merge_configs_tpm_tier_override() {
+        let mut global = Config::default();
+        global.tpm.tier = crate::tpm::TpmTier::Standard;
+
+        let profile = ProfileConfig {
+            tpm: Some(TpmConfigOverride {
+                tier: Some(crate::tpm::TpmTier::Prod),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let merged = merge_configs(global, &profile);
+        assert_eq!(merged.tpm.tier, crate::tpm::TpmTier::Prod);
+    }
+
+    #[test]
+    fn test_merge_configs_tpm_inherits_when_not_overridden() {
+        let mut global = Config::default();
+        global.tpm.tier = crate::tpm::TpmTier::Fast;
+        global.tpm.max_review_cycles = Some(7);
+        global.tpm.disabled_agents = vec!["principal-engineer".to_string()];
+
+        let profile = ProfileConfig::default();
+        let merged = merge_configs(global, &profile);
+
+        assert_eq!(merged.tpm.tier, crate::tpm::TpmTier::Fast);
+        assert_eq!(merged.tpm.max_review_cycles, Some(7));
+        assert_eq!(merged.tpm.disabled_agents, vec!["principal-engineer"]);
+    }
+
+    #[test]
+    fn test_merge_configs_tpm_max_review_cycles_override() {
+        let mut global = Config::default();
+        global.tpm.max_review_cycles = Some(10);
+
+        let profile = ProfileConfig {
+            tpm: Some(TpmConfigOverride {
+                max_review_cycles: Some(Some(3)),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let merged = merge_configs(global, &profile);
+        assert_eq!(merged.tpm.max_review_cycles, Some(3));
+    }
+
+    #[test]
+    fn test_merge_configs_tpm_max_review_cycles_clear_override() {
+        let mut global = Config::default();
+        global.tpm.max_review_cycles = Some(10);
+
+        // Some(None) means "explicitly clear the override back to tier default"
+        let profile = ProfileConfig {
+            tpm: Some(TpmConfigOverride {
+                max_review_cycles: Some(None),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let merged = merge_configs(global, &profile);
+        assert!(
+            merged.tpm.max_review_cycles.is_none(),
+            "Some(None) override should clear max_review_cycles"
+        );
+    }
+
+    #[test]
+    fn test_merge_configs_tpm_disabled_agents_override() {
+        let mut global = Config::default();
+        global.tpm.disabled_agents = vec!["principal-engineer".to_string()];
+
+        let profile = ProfileConfig {
+            tpm: Some(TpmConfigOverride {
+                disabled_agents: Some(vec![
+                    "end-user-simulator".to_string(),
+                    "blind-hunter".to_string(),
+                ]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let merged = merge_configs(global, &profile);
+        assert_eq!(
+            merged.tpm.disabled_agents,
+            vec!["end-user-simulator", "blind-hunter"],
+            "profile override should replace, not append"
+        );
+    }
+
+    #[test]
+    fn test_merge_configs_tpm_partial_override_preserves_others() {
+        let mut global = Config::default();
+        global.tpm.tier = crate::tpm::TpmTier::Fast;
+        global.tpm.max_review_cycles = Some(2);
+        global.tpm.disabled_agents = vec!["blind-hunter".to_string()];
+
+        // Only override tier; max_review_cycles and disabled_agents should survive
+        let profile = ProfileConfig {
+            tpm: Some(TpmConfigOverride {
+                tier: Some(crate::tpm::TpmTier::Prod),
+                max_review_cycles: None,
+                disabled_agents: None,
+            }),
+            ..Default::default()
+        };
+
+        let merged = merge_configs(global, &profile);
+        assert_eq!(merged.tpm.tier, crate::tpm::TpmTier::Prod);
+        assert_eq!(merged.tpm.max_review_cycles, Some(2));
+        assert_eq!(merged.tpm.disabled_agents, vec!["blind-hunter"]);
+    }
+
+    #[test]
+    fn test_tpm_config_override_toml_roundtrip() {
+        let config = ProfileConfig {
+            tpm: Some(TpmConfigOverride {
+                tier: Some(crate::tpm::TpmTier::Prod),
+                max_review_cycles: Some(Some(5)),
+                disabled_agents: Some(vec!["end-user-simulator".to_string()]),
+            }),
+            ..Default::default()
+        };
+
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        assert!(serialized.contains("[tpm]"));
+        assert!(serialized.contains("prod"));
+
+        let deserialized: ProfileConfig = toml::from_str(&serialized).unwrap();
+        let tpm = deserialized.tpm.unwrap();
+        assert_eq!(tpm.tier, Some(crate::tpm::TpmTier::Prod));
+        assert_eq!(tpm.max_review_cycles, Some(Some(5)));
+        assert_eq!(
+            tpm.disabled_agents,
+            Some(vec!["end-user-simulator".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_tpm_config_override_empty_toml_roundtrip() {
+        let config = ProfileConfig {
+            tpm: Some(TpmConfigOverride::default()),
+            ..Default::default()
+        };
+
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        let deserialized: ProfileConfig = toml::from_str(&serialized).unwrap();
+        // Empty TpmConfigOverride may serialize as [tpm] section or be omitted;
+        // either way deserializing back should give us the default.
+        if let Some(tpm) = deserialized.tpm {
+            assert!(tpm.tier.is_none());
+            assert!(tpm.max_review_cycles.is_none());
+            assert!(tpm.disabled_agents.is_none());
+        }
+    }
+
+    #[test]
+    fn test_profile_has_overrides_with_tpm() {
+        let with_tpm = ProfileConfig {
+            tpm: Some(TpmConfigOverride {
+                tier: Some(crate::tpm::TpmTier::Fast),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(profile_has_overrides(&with_tpm));
+    }
+
     #[test]
     fn test_sandbox_override_string_shorthand() {
         // Regression test: all Option<Vec<String>> sandbox fields accept a plain string

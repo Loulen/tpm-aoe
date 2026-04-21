@@ -1452,6 +1452,148 @@ mod tests {
         assert_eq!(archive_tpm_artifacts(&instance).unwrap(), false);
     }
 
+    // --- TpmConfig serde tests ---
+
+    #[test]
+    fn tpm_config_default_values() {
+        let config = TpmConfig::default();
+        assert_eq!(config.tier, TpmTier::Standard);
+        assert!(config.max_review_cycles.is_none());
+        assert!(config.disabled_agents.is_empty());
+    }
+
+    #[test]
+    fn tpm_config_json_roundtrip_default() {
+        let config = TpmConfig::default();
+        let json = serde_json::to_string(&config).unwrap();
+        let parsed: TpmConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.tier, TpmTier::Standard);
+        assert!(parsed.max_review_cycles.is_none());
+        assert!(parsed.disabled_agents.is_empty());
+    }
+
+    #[test]
+    fn tpm_config_json_roundtrip_with_overrides() {
+        let config = TpmConfig {
+            tier: TpmTier::Prod,
+            max_review_cycles: Some(5),
+            disabled_agents: vec![
+                "principal-engineer".to_string(),
+                "end-user-simulator".to_string(),
+            ],
+        };
+        let json = serde_json::to_string_pretty(&config).unwrap();
+        let parsed: TpmConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.tier, TpmTier::Prod);
+        assert_eq!(parsed.max_review_cycles, Some(5));
+        assert_eq!(parsed.disabled_agents.len(), 2);
+        assert_eq!(parsed.disabled_agents[0], "principal-engineer");
+        assert_eq!(parsed.disabled_agents[1], "end-user-simulator");
+    }
+
+    #[test]
+    fn tpm_config_json_roundtrip_with_disabled_agents_only() {
+        let config = TpmConfig {
+            tier: TpmTier::Fast,
+            max_review_cycles: None,
+            disabled_agents: vec!["blind-hunter".to_string()],
+        };
+        let json = serde_json::to_string(&config).unwrap();
+
+        // max_review_cycles should be absent from JSON (skip_serializing_if)
+        let raw: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(
+            raw.get("max_review_cycles").is_none(),
+            "None max_review_cycles should be omitted from JSON"
+        );
+
+        let parsed: TpmConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.tier, TpmTier::Fast);
+        assert!(parsed.max_review_cycles.is_none());
+        assert_eq!(parsed.disabled_agents, vec!["blind-hunter"]);
+    }
+
+    #[test]
+    fn tpm_config_json_skips_empty_disabled_agents() {
+        let config = TpmConfig::default();
+        let json = serde_json::to_string(&config).unwrap();
+        let raw: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(
+            raw.get("disabled_agents").is_none(),
+            "empty disabled_agents should be omitted from JSON"
+        );
+    }
+
+    #[test]
+    fn tpm_tier_json_serde_roundtrip() {
+        for tier in [TpmTier::Fast, TpmTier::Standard, TpmTier::Prod] {
+            let json = serde_json::to_string(&tier).unwrap();
+            let parsed: TpmTier = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, tier, "JSON roundtrip failed for {:?}", tier);
+        }
+    }
+
+    #[test]
+    fn tpm_tier_json_serializes_lowercase() {
+        assert_eq!(serde_json::to_string(&TpmTier::Fast).unwrap(), "\"fast\"");
+        assert_eq!(
+            serde_json::to_string(&TpmTier::Standard).unwrap(),
+            "\"standard\""
+        );
+        assert_eq!(serde_json::to_string(&TpmTier::Prod).unwrap(), "\"prod\"");
+    }
+
+    #[test]
+    fn write_tpm_config_creates_correct_json() {
+        let dir = TempDir::new().unwrap();
+        let config = TpmConfig {
+            tier: TpmTier::Prod,
+            max_review_cycles: Some(3),
+            disabled_agents: vec!["end-user-simulator".to_string()],
+        };
+
+        write_tpm_config(dir.path(), &config).unwrap();
+
+        let config_path = dir.path().join(".tpm/config.json");
+        assert!(config_path.exists(), "config.json should exist");
+
+        let content = std::fs::read_to_string(&config_path).unwrap();
+        let parsed: TpmConfig = serde_json::from_str(&content).unwrap();
+        assert_eq!(parsed.tier, TpmTier::Prod);
+        assert_eq!(parsed.max_review_cycles, Some(3));
+        assert_eq!(parsed.disabled_agents, vec!["end-user-simulator"]);
+    }
+
+    #[test]
+    fn write_tpm_config_creates_tpm_directory() {
+        let dir = TempDir::new().unwrap();
+        let tpm_dir = dir.path().join(".tpm");
+        assert!(!tpm_dir.exists(), "precondition: .tpm/ should not exist");
+
+        write_tpm_config(dir.path(), &TpmConfig::default()).unwrap();
+        assert!(tpm_dir.is_dir(), ".tpm/ directory should be created");
+    }
+
+    #[test]
+    fn write_tpm_config_default_produces_minimal_json() {
+        let dir = TempDir::new().unwrap();
+        write_tpm_config(dir.path(), &TpmConfig::default()).unwrap();
+
+        let content = std::fs::read_to_string(dir.path().join(".tpm/config.json")).unwrap();
+        let raw: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+        // Default config should have tier but omit optional/empty fields
+        assert_eq!(raw["tier"].as_str(), Some("standard"));
+        assert!(
+            raw.get("max_review_cycles").is_none(),
+            "default should omit max_review_cycles"
+        );
+        assert!(
+            raw.get("disabled_agents").is_none(),
+            "default should omit empty disabled_agents"
+        );
+    }
+
     #[test]
     #[serial]
     fn archive_tpm_artifacts_copies_files_and_writes_metadata() {
