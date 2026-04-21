@@ -129,6 +129,10 @@ pub struct Instance {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_info: Option<TerminalInfo>,
 
+    /// Whether this session is managed by the TPM workflow (created with a tpm_tier).
+    #[serde(default)]
+    pub tpm_managed: bool,
+
     /// Runtime-only: which profile this instance was loaded from. Not persisted to disk.
     #[serde(default, skip_serializing)]
     pub source_profile: String,
@@ -162,6 +166,7 @@ impl Instance {
             workspace_info: None,
             sandbox_info: None,
             terminal_info: None,
+            tpm_managed: false,
             source_profile: String::new(),
             last_error_check: None,
             last_start_time: None,
