@@ -396,6 +396,7 @@ pub fn build_instance(
             &instance.extra_args,
             tier,
         )?;
+        instance.tpm_managed = true;
     }
 
     if params.sandbox {
