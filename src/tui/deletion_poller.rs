@@ -67,6 +67,11 @@ impl DeletionPoller {
         // worktrees) are still available for teardown commands.
         Self::run_on_destroy_hooks(&request.instance);
 
+        // Archive .tpm/ artifacts before worktree cleanup destroys them.
+        if let Err(e) = crate::tpm::archive_tpm_artifacts(&request.instance) {
+            tracing::warn!("failed to archive TPM artifacts: {}", e);
+        }
+
         // Track branch info for potential deletion after worktree removal
         let branch_to_delete = if request.delete_branch {
             request

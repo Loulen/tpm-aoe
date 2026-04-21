@@ -23,6 +23,8 @@ use std::str::FromStr;
 
 use anyhow::{anyhow, Context, Result};
 
+use crate::session::Instance;
+
 /// Tier of TPM orchestration. Controls how the orchestrator dispatches work.
 /// Currently threaded through the call chain without behavioral effect; future
 /// waves will use it to select different orchestration strategies.
@@ -607,6 +609,110 @@ pub fn build_tpm_extra_args(
     ))
 }
 
+/// TPM artifact filenames eligible for archival.
+const ARCHIVABLE_FILES: &[&str] = &["STATE.md", "SUMMARY.md", "PLAN.md", "config.json"];
+
+/// Resolve the `.tpm/` directory for a session instance.
+///
+/// Checks worktree main_repo_path first (the primary repo root for worktree
+/// sessions), then falls back to project_path (for non-worktree sessions or
+/// when the main repo doesn't have `.tpm/`). For workspace sessions, checks
+/// the first repo's worktree_path as a last resort.
+///
+/// Returns `None` if no `.tpm/` directory with a `STATE.md` exists.
+pub fn resolve_tpm_dir(instance: &Instance) -> Option<PathBuf> {
+    // Worktree session: check main_repo_path first
+    if let Some(wt) = &instance.worktree_info {
+        let candidate = PathBuf::from(&wt.main_repo_path).join(".tpm");
+        if candidate.join("STATE.md").is_file() {
+            return Some(candidate);
+        }
+    }
+
+    // project_path (always present)
+    let candidate = PathBuf::from(&instance.project_path).join(".tpm");
+    if candidate.join("STATE.md").is_file() {
+        return Some(candidate);
+    }
+
+    // Workspace session: check first repo's worktree_path
+    if let Some(ws) = &instance.workspace_info {
+        if let Some(repo) = ws.repos.first() {
+            let candidate = PathBuf::from(&repo.worktree_path).join(".tpm");
+            if candidate.join("STATE.md").is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
+}
+
+/// Replace characters unsafe for filenames with hyphens.
+fn sanitize_title(title: &str) -> String {
+    title
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
+/// Archive `.tpm/` artifacts to the AoE history directory before worktree
+/// cleanup. Returns `Ok(true)` if archival happened, `Ok(false)` if no
+/// `.tpm/STATE.md` was found on disk. Errors are propagated but callers
+/// should treat them as non-fatal warnings.
+pub fn archive_tpm_artifacts(instance: &Instance) -> Result<bool> {
+    let tpm_dir = match resolve_tpm_dir(instance) {
+        Some(dir) => dir,
+        None => return Ok(false),
+    };
+
+    let app_dir = crate::session::get_app_dir().context("failed to locate AoE config dir")?;
+    let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H-%M-%S").to_string();
+    let safe_title = sanitize_title(&instance.title);
+    let archive_dir = app_dir
+        .join("history")
+        .join(format!("{}_{}", timestamp, safe_title));
+
+    std::fs::create_dir_all(&archive_dir)
+        .with_context(|| format!("failed to create {}", archive_dir.display()))?;
+
+    for filename in ARCHIVABLE_FILES {
+        let src = tpm_dir.join(filename);
+        if src.is_file() {
+            let dest = archive_dir.join(filename);
+            std::fs::copy(&src, &dest).with_context(|| {
+                format!("failed to copy {} to {}", src.display(), dest.display())
+            })?;
+        }
+    }
+
+    // Write metadata.json with session context
+    let metadata = serde_json::json!({
+        "session_id": instance.id,
+        "title": instance.title,
+        "archived_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "project_path": instance.project_path,
+    });
+    let metadata_path = archive_dir.join("metadata.json");
+    let serialized = serde_json::to_string_pretty(&metadata)?;
+    std::fs::write(&metadata_path, serialized)
+        .with_context(|| format!("failed to write {}", metadata_path.display()))?;
+
+    tracing::info!(
+        "archived TPM artifacts for session {} to {}",
+        instance.id,
+        archive_dir.display()
+    );
+
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1116,5 +1222,148 @@ mod tests {
             "error missing substring: {}",
             err
         );
+    }
+
+    // --- archive / resolve_tpm_dir tests ---
+
+    fn create_test_instance(title: &str, project_path: &str) -> Instance {
+        Instance::new(title, project_path)
+    }
+
+    #[test]
+    fn sanitize_title_replaces_unsafe_chars() {
+        assert_eq!(sanitize_title("my-task"), "my-task");
+        assert_eq!(sanitize_title("feat/new thing"), "feat-new-thing");
+        assert_eq!(sanitize_title("hello world: test!"), "hello-world--test-");
+        assert_eq!(
+            sanitize_title("dots.and_underscores"),
+            "dots.and_underscores"
+        );
+    }
+
+    #[test]
+    fn sanitize_title_empty_string() {
+        assert_eq!(sanitize_title(""), "");
+    }
+
+    #[test]
+    fn resolve_tpm_dir_returns_none_when_no_tpm_dir() {
+        let dir = TempDir::new().unwrap();
+        let instance = create_test_instance("test", dir.path().to_str().unwrap());
+        assert!(resolve_tpm_dir(&instance).is_none());
+    }
+
+    #[test]
+    fn resolve_tpm_dir_finds_tpm_in_project_path() {
+        let dir = TempDir::new().unwrap();
+        let tpm = dir.path().join(".tpm");
+        std::fs::create_dir_all(&tpm).unwrap();
+        std::fs::write(tpm.join("STATE.md"), "# State\n").unwrap();
+
+        let instance = create_test_instance("test", dir.path().to_str().unwrap());
+        let resolved = resolve_tpm_dir(&instance);
+        assert_eq!(resolved, Some(tpm));
+    }
+
+    #[test]
+    fn resolve_tpm_dir_requires_state_md() {
+        let dir = TempDir::new().unwrap();
+        let tpm = dir.path().join(".tpm");
+        std::fs::create_dir_all(&tpm).unwrap();
+        // .tpm/ exists but no STATE.md inside
+        std::fs::write(tpm.join("PLAN.md"), "# Plan\n").unwrap();
+
+        let instance = create_test_instance("test", dir.path().to_str().unwrap());
+        assert!(resolve_tpm_dir(&instance).is_none());
+    }
+
+    #[test]
+    fn resolve_tpm_dir_prefers_main_repo_path() {
+        let main_repo = TempDir::new().unwrap();
+        let worktree = TempDir::new().unwrap();
+
+        // Put STATE.md in both locations
+        let main_tpm = main_repo.path().join(".tpm");
+        std::fs::create_dir_all(&main_tpm).unwrap();
+        std::fs::write(main_tpm.join("STATE.md"), "# Main\n").unwrap();
+
+        let wt_tpm = worktree.path().join(".tpm");
+        std::fs::create_dir_all(&wt_tpm).unwrap();
+        std::fs::write(wt_tpm.join("STATE.md"), "# WT\n").unwrap();
+
+        let mut instance = create_test_instance("test", worktree.path().to_str().unwrap());
+        instance.worktree_info = Some(crate::session::WorktreeInfo {
+            branch: "feature/test".to_string(),
+            main_repo_path: main_repo.path().to_string_lossy().to_string(),
+            managed_by_aoe: true,
+            created_at: chrono::Utc::now(),
+        });
+
+        let resolved = resolve_tpm_dir(&instance);
+        assert_eq!(resolved, Some(main_tpm));
+    }
+
+    #[test]
+    fn archive_tpm_artifacts_returns_false_when_no_tpm() {
+        let dir = TempDir::new().unwrap();
+        let instance = create_test_instance("test", dir.path().to_str().unwrap());
+        assert_eq!(archive_tpm_artifacts(&instance).unwrap(), false);
+    }
+
+    #[test]
+    fn archive_tpm_artifacts_copies_files_and_writes_metadata() {
+        let project = TempDir::new().unwrap();
+        let tpm = project.path().join(".tpm");
+        std::fs::create_dir_all(&tpm).unwrap();
+        std::fs::write(tpm.join("STATE.md"), "# State content\n").unwrap();
+        std::fs::write(tpm.join("SUMMARY.md"), "# Summary content\n").unwrap();
+        // PLAN.md absent, should be skipped gracefully
+
+        let instance = create_test_instance("my-task", project.path().to_str().unwrap());
+        let result = archive_tpm_artifacts(&instance).unwrap();
+        assert!(result, "archival should have happened");
+
+        // Find the archive directory
+        let app_dir = crate::session::get_app_dir().unwrap();
+        let history_dir = app_dir.join("history");
+        assert!(history_dir.exists(), "history dir should exist");
+
+        let entries: Vec<_> = std::fs::read_dir(&history_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert_eq!(entries.len(), 1, "expected exactly one archive entry");
+
+        let archive_dir = entries[0].path();
+        let dir_name = archive_dir
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        assert!(
+            dir_name.ends_with("_my-task"),
+            "dir name should end with _my-task, got: {}",
+            dir_name
+        );
+
+        // Check copied files
+        assert!(archive_dir.join("STATE.md").is_file());
+        assert!(archive_dir.join("SUMMARY.md").is_file());
+        assert!(!archive_dir.join("PLAN.md").exists());
+
+        // Check content preserved
+        let state = std::fs::read_to_string(archive_dir.join("STATE.md")).unwrap();
+        assert_eq!(state, "# State content\n");
+
+        // Check metadata.json
+        let meta_str = std::fs::read_to_string(archive_dir.join("metadata.json")).unwrap();
+        let meta: serde_json::Value = serde_json::from_str(&meta_str).unwrap();
+        assert_eq!(meta["session_id"].as_str().unwrap(), instance.id);
+        assert_eq!(meta["title"].as_str().unwrap(), "my-task");
+        assert_eq!(
+            meta["project_path"].as_str().unwrap(),
+            project.path().to_str().unwrap()
+        );
+        assert!(meta["archived_at"].as_str().is_some());
     }
 }
