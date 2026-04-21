@@ -648,9 +648,17 @@ pub fn resolve_tpm_dir(instance: &Instance) -> Option<PathBuf> {
     None
 }
 
-/// Replace characters unsafe for filenames with hyphens.
+/// Maximum length of the sanitized title component in archive dir names.
+/// Keeps the full path well under the 255-byte filesystem limit even after
+/// the timestamp and session ID prefix are prepended.
+const MAX_TITLE_LEN: usize = 100;
+
+/// Replace characters unsafe for filenames with hyphens and truncate to
+/// [`MAX_TITLE_LEN`]. Returns an empty string when the input is empty or
+/// contains only special characters; callers should fall back to the
+/// session ID in that case.
 fn sanitize_title(title: &str) -> String {
-    title
+    let sanitized: String = title
         .chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
@@ -659,7 +667,27 @@ fn sanitize_title(title: &str) -> String {
                 '-'
             }
         })
-        .collect()
+        .collect();
+    // Trim leading/trailing hyphens so pure-special-char titles collapse to ""
+    let trimmed = sanitized.trim_matches('-');
+    if trimmed.len() > MAX_TITLE_LEN {
+        trimmed[..MAX_TITLE_LEN].to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Build the archive directory name: `<timestamp>_<id_prefix>_<title>`.
+/// Falls back to using only the session ID when the sanitized title is empty.
+fn archive_dir_name(now: &chrono::DateTime<chrono::Utc>, instance: &Instance) -> String {
+    let timestamp = now.format("%Y-%m-%dT%H-%M-%S").to_string();
+    let id_prefix = &instance.id[..instance.id.len().min(8)];
+    let safe_title = sanitize_title(&instance.title);
+    if safe_title.is_empty() {
+        format!("{}_{}", timestamp, id_prefix)
+    } else {
+        format!("{}_{}_{}", timestamp, id_prefix, safe_title)
+    }
 }
 
 /// Archive `.tpm/` artifacts to the AoE history directory before worktree
@@ -672,12 +700,11 @@ pub fn archive_tpm_artifacts(instance: &Instance) -> Result<bool> {
         None => return Ok(false),
     };
 
+    let now = chrono::Utc::now();
     let app_dir = crate::session::get_app_dir().context("failed to locate AoE config dir")?;
-    let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H-%M-%S").to_string();
-    let safe_title = sanitize_title(&instance.title);
     let archive_dir = app_dir
         .join("history")
-        .join(format!("{}_{}", timestamp, safe_title));
+        .join(archive_dir_name(&now, instance));
 
     std::fs::create_dir_all(&archive_dir)
         .with_context(|| format!("failed to create {}", archive_dir.display()))?;
@@ -696,7 +723,7 @@ pub fn archive_tpm_artifacts(instance: &Instance) -> Result<bool> {
     let metadata = serde_json::json!({
         "session_id": instance.id,
         "title": instance.title,
-        "archived_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "archived_at": now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         "project_path": instance.project_path,
     });
     let metadata_path = archive_dir.join("metadata.json");
@@ -1230,11 +1257,35 @@ mod tests {
         Instance::new(title, project_path)
     }
 
+    /// RAII guard for `$XDG_CONFIG_HOME`. On Linux `dirs::config_dir()` checks
+    /// this first, so we must clear it when redirecting via `HomeGuard` alone
+    /// would be insufficient.
+    struct XdgGuard {
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl XdgGuard {
+        fn unset() -> Self {
+            let prev = std::env::var_os("XDG_CONFIG_HOME");
+            std::env::remove_var("XDG_CONFIG_HOME");
+            Self { prev }
+        }
+    }
+
+    impl Drop for XdgGuard {
+        fn drop(&mut self) {
+            match self.prev.take() {
+                Some(p) => std::env::set_var("XDG_CONFIG_HOME", p),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+        }
+    }
+
     #[test]
     fn sanitize_title_replaces_unsafe_chars() {
         assert_eq!(sanitize_title("my-task"), "my-task");
         assert_eq!(sanitize_title("feat/new thing"), "feat-new-thing");
-        assert_eq!(sanitize_title("hello world: test!"), "hello-world--test-");
+        assert_eq!(sanitize_title("hello world: test!"), "hello-world--test");
         assert_eq!(
             sanitize_title("dots.and_underscores"),
             "dots.and_underscores"
@@ -1244,6 +1295,54 @@ mod tests {
     #[test]
     fn sanitize_title_empty_string() {
         assert_eq!(sanitize_title(""), "");
+    }
+
+    #[test]
+    fn sanitize_title_all_special_chars() {
+        assert_eq!(sanitize_title("///"), "");
+        assert_eq!(sanitize_title("  "), "");
+    }
+
+    #[test]
+    fn sanitize_title_truncates_long_input() {
+        let long = "a".repeat(200);
+        let result = sanitize_title(&long);
+        assert_eq!(result.len(), MAX_TITLE_LEN);
+    }
+
+    #[test]
+    fn archive_dir_name_falls_back_to_id_on_empty_title() {
+        let instance = create_test_instance("", "/tmp/test");
+        let now = chrono::Utc::now();
+        let name = archive_dir_name(&now, &instance);
+        // Format: <timestamp>_<id_prefix> (no trailing underscore)
+        let id_prefix = &instance.id[..8];
+        assert!(
+            name.ends_with(id_prefix),
+            "expected dir name to end with id prefix {}, got: {}",
+            id_prefix,
+            name
+        );
+        // No double underscore from missing title
+        assert!(
+            !name.contains("__"),
+            "should not have double underscore: {}",
+            name
+        );
+    }
+
+    #[test]
+    fn archive_dir_name_includes_id_and_title() {
+        let instance = create_test_instance("my-task", "/tmp/test");
+        let now = chrono::Utc::now();
+        let name = archive_dir_name(&now, &instance);
+        let id_prefix = &instance.id[..8];
+        assert!(name.contains(id_prefix), "missing id prefix in: {}", name);
+        assert!(
+            name.ends_with("_my-task"),
+            "should end with _my-task, got: {}",
+            name
+        );
     }
 
     #[test]
@@ -1311,7 +1410,12 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn archive_tpm_artifacts_copies_files_and_writes_metadata() {
+        let home_temp = TempDir::new().unwrap();
+        let _home = HomeGuard::set(home_temp.path());
+        let _xdg = XdgGuard::unset();
+
         let project = TempDir::new().unwrap();
         let tpm = project.path().join(".tpm");
         std::fs::create_dir_all(&tpm).unwrap();
@@ -1343,6 +1447,14 @@ mod tests {
         assert!(
             dir_name.ends_with("_my-task"),
             "dir name should end with _my-task, got: {}",
+            dir_name
+        );
+        // Verify session ID prefix is embedded
+        let id_prefix = &instance.id[..8];
+        assert!(
+            dir_name.contains(id_prefix),
+            "dir name should contain id prefix {}, got: {}",
+            id_prefix,
             dir_name
         );
 
