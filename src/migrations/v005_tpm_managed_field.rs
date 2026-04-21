@@ -18,13 +18,37 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
 
-    for entry in fs::read_dir(&profiles_dir)? {
-        let entry = entry?;
+    let entries = match fs::read_dir(&profiles_dir) {
+        Ok(e) => e,
+        Err(e) => {
+            debug!(
+                "Cannot read profiles directory {}: {}, skipping",
+                profiles_dir.display(),
+                e
+            );
+            return Ok(());
+        }
+    };
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                debug!("Failed to read profile entry: {}, skipping", e);
+                continue;
+            }
+        };
         if !entry.path().is_dir() {
             continue;
         }
         let sessions_path = entry.path().join("sessions.json");
-        migrate_sessions_file(&sessions_path)?;
+        if let Err(e) = migrate_sessions_file(&sessions_path) {
+            debug!(
+                "Failed to migrate {}: {}, skipping",
+                sessions_path.display(),
+                e
+            );
+        }
     }
 
     Ok(())
@@ -35,7 +59,13 @@ fn migrate_sessions_file(path: &std::path::Path) -> Result<()> {
         return Ok(());
     }
 
-    let content = fs::read_to_string(path)?;
+    let content = match fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) => {
+            debug!("Failed to read {}: {}, skipping", path.display(), e);
+            return Ok(());
+        }
+    };
     if content.trim().is_empty() {
         return Ok(());
     }
