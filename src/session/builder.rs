@@ -415,9 +415,7 @@ pub fn build_instance(
             disabled_agents: disabled,
         };
         let project_path = std::path::Path::new(&instance.project_path);
-        if let Err(e) = crate::tpm::write_tpm_config(project_path, &tpm_config) {
-            tracing::warn!("failed to write TPM config: {}", e);
-        }
+        crate::tpm::write_tpm_config(project_path, &tpm_config)?;
     }
 
     if params.sandbox {

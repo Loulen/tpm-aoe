@@ -1343,8 +1343,21 @@ impl NewSessionDialog {
                     self.tpm_review_input = None;
                     return DialogResult::Continue;
                 }
-                _ => {
+                KeyCode::Char(c) if c.is_ascii_digit() => {
                     input.handle_event(&crossterm::event::Event::Key(key));
+                    return DialogResult::Continue;
+                }
+                KeyCode::Backspace
+                | KeyCode::Delete
+                | KeyCode::Left
+                | KeyCode::Right
+                | KeyCode::Home
+                | KeyCode::End => {
+                    input.handle_event(&crossterm::event::Event::Key(key));
+                    return DialogResult::Continue;
+                }
+                _ => {
+                    // Reject non-digit characters silently
                     return DialogResult::Continue;
                 }
             }
