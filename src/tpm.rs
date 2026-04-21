@@ -23,6 +23,8 @@ use std::str::FromStr;
 
 use anyhow::{anyhow, Context, Result};
 
+use crate::session::Instance;
+
 /// Tier of TPM orchestration. Controls how the orchestrator dispatches work.
 /// Currently threaded through the call chain without behavioral effect; future
 /// waves will use it to select different orchestration strategies.
@@ -607,6 +609,137 @@ pub fn build_tpm_extra_args(
     ))
 }
 
+/// TPM artifact filenames eligible for archival.
+const ARCHIVABLE_FILES: &[&str] = &["STATE.md", "SUMMARY.md", "PLAN.md", "config.json"];
+
+/// Resolve the `.tpm/` directory for a session instance.
+///
+/// Checks worktree main_repo_path first (the primary repo root for worktree
+/// sessions), then falls back to project_path (for non-worktree sessions or
+/// when the main repo doesn't have `.tpm/`). For workspace sessions, checks
+/// the first repo's worktree_path as a last resort.
+///
+/// Returns `None` if no `.tpm/` directory with a `STATE.md` exists.
+pub fn resolve_tpm_dir(instance: &Instance) -> Option<PathBuf> {
+    // Worktree session: check main_repo_path first
+    if let Some(wt) = &instance.worktree_info {
+        let candidate = PathBuf::from(&wt.main_repo_path).join(".tpm");
+        if candidate.join("STATE.md").is_file() {
+            return Some(candidate);
+        }
+    }
+
+    // project_path (always present)
+    let candidate = PathBuf::from(&instance.project_path).join(".tpm");
+    if candidate.join("STATE.md").is_file() {
+        return Some(candidate);
+    }
+
+    // Workspace session: check first repo's worktree_path
+    if let Some(ws) = &instance.workspace_info {
+        if let Some(repo) = ws.repos.first() {
+            let candidate = PathBuf::from(&repo.worktree_path).join(".tpm");
+            if candidate.join("STATE.md").is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
+}
+
+/// Maximum length of the sanitized title component in archive dir names.
+/// Keeps the full path well under the 255-byte filesystem limit even after
+/// the timestamp and session ID prefix are prepended.
+const MAX_TITLE_LEN: usize = 100;
+
+/// Replace characters unsafe for filenames with hyphens and truncate to
+/// [`MAX_TITLE_LEN`]. Returns an empty string when the input is empty or
+/// contains only special characters; callers should fall back to the
+/// session ID in that case.
+fn sanitize_title(title: &str) -> String {
+    let sanitized: String = title
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    // Trim leading/trailing hyphens so pure-special-char titles collapse to ""
+    let trimmed = sanitized.trim_matches('-');
+    if trimmed.len() > MAX_TITLE_LEN {
+        trimmed[..MAX_TITLE_LEN].to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Build the archive directory name: `<timestamp>_<id_prefix>_<title>`.
+/// Falls back to using only the session ID when the sanitized title is empty.
+fn archive_dir_name(now: &chrono::DateTime<chrono::Utc>, instance: &Instance) -> String {
+    let timestamp = now.format("%Y-%m-%dT%H-%M-%S").to_string();
+    let id_prefix = &instance.id[..instance.id.len().min(8)];
+    let safe_title = sanitize_title(&instance.title);
+    if safe_title.is_empty() {
+        format!("{}_{}", timestamp, id_prefix)
+    } else {
+        format!("{}_{}_{}", timestamp, id_prefix, safe_title)
+    }
+}
+
+/// Archive `.tpm/` artifacts to the AoE history directory before worktree
+/// cleanup. Returns `Ok(true)` if archival happened, `Ok(false)` if no
+/// `.tpm/STATE.md` was found on disk. Errors are propagated but callers
+/// should treat them as non-fatal warnings.
+pub fn archive_tpm_artifacts(instance: &Instance) -> Result<bool> {
+    let tpm_dir = match resolve_tpm_dir(instance) {
+        Some(dir) => dir,
+        None => return Ok(false),
+    };
+
+    let now = chrono::Utc::now();
+    let app_dir = crate::session::get_app_dir().context("failed to locate AoE config dir")?;
+    let archive_dir = app_dir
+        .join("history")
+        .join(archive_dir_name(&now, instance));
+
+    std::fs::create_dir_all(&archive_dir)
+        .with_context(|| format!("failed to create {}", archive_dir.display()))?;
+
+    for filename in ARCHIVABLE_FILES {
+        let src = tpm_dir.join(filename);
+        if src.is_file() {
+            let dest = archive_dir.join(filename);
+            std::fs::copy(&src, &dest).with_context(|| {
+                format!("failed to copy {} to {}", src.display(), dest.display())
+            })?;
+        }
+    }
+
+    // Write metadata.json with session context
+    let metadata = serde_json::json!({
+        "session_id": instance.id,
+        "title": instance.title,
+        "archived_at": now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "project_path": instance.project_path,
+    });
+    let metadata_path = archive_dir.join("metadata.json");
+    let serialized = serde_json::to_string_pretty(&metadata)?;
+    std::fs::write(&metadata_path, serialized)
+        .with_context(|| format!("failed to write {}", metadata_path.display()))?;
+
+    tracing::info!(
+        "archived TPM artifacts for session {} to {}",
+        instance.id,
+        archive_dir.display()
+    );
+
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1116,5 +1249,233 @@ mod tests {
             "error missing substring: {}",
             err
         );
+    }
+
+    // --- archive / resolve_tpm_dir tests ---
+
+    fn create_test_instance(title: &str, project_path: &str) -> Instance {
+        Instance::new(title, project_path)
+    }
+
+    /// RAII guard for `$XDG_CONFIG_HOME`. On Linux `dirs::config_dir()` checks
+    /// this first, so we must clear it when redirecting via `HomeGuard` alone
+    /// would be insufficient.
+    struct XdgGuard {
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl XdgGuard {
+        fn unset() -> Self {
+            let prev = std::env::var_os("XDG_CONFIG_HOME");
+            std::env::remove_var("XDG_CONFIG_HOME");
+            Self { prev }
+        }
+    }
+
+    impl Drop for XdgGuard {
+        fn drop(&mut self) {
+            match self.prev.take() {
+                Some(p) => std::env::set_var("XDG_CONFIG_HOME", p),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+        }
+    }
+
+    #[test]
+    fn sanitize_title_replaces_unsafe_chars() {
+        assert_eq!(sanitize_title("my-task"), "my-task");
+        assert_eq!(sanitize_title("feat/new thing"), "feat-new-thing");
+        assert_eq!(sanitize_title("hello world: test!"), "hello-world--test");
+        assert_eq!(
+            sanitize_title("dots.and_underscores"),
+            "dots.and_underscores"
+        );
+    }
+
+    #[test]
+    fn sanitize_title_empty_string() {
+        assert_eq!(sanitize_title(""), "");
+    }
+
+    #[test]
+    fn sanitize_title_all_special_chars() {
+        assert_eq!(sanitize_title("///"), "");
+        assert_eq!(sanitize_title("  "), "");
+    }
+
+    #[test]
+    fn sanitize_title_truncates_long_input() {
+        let long = "a".repeat(200);
+        let result = sanitize_title(&long);
+        assert_eq!(result.len(), MAX_TITLE_LEN);
+    }
+
+    #[test]
+    fn archive_dir_name_falls_back_to_id_on_empty_title() {
+        let instance = create_test_instance("", "/tmp/test");
+        let now = chrono::Utc::now();
+        let name = archive_dir_name(&now, &instance);
+        // Format: <timestamp>_<id_prefix> (no trailing underscore)
+        let id_prefix = &instance.id[..8];
+        assert!(
+            name.ends_with(id_prefix),
+            "expected dir name to end with id prefix {}, got: {}",
+            id_prefix,
+            name
+        );
+        // No double underscore from missing title
+        assert!(
+            !name.contains("__"),
+            "should not have double underscore: {}",
+            name
+        );
+    }
+
+    #[test]
+    fn archive_dir_name_includes_id_and_title() {
+        let instance = create_test_instance("my-task", "/tmp/test");
+        let now = chrono::Utc::now();
+        let name = archive_dir_name(&now, &instance);
+        let id_prefix = &instance.id[..8];
+        assert!(name.contains(id_prefix), "missing id prefix in: {}", name);
+        assert!(
+            name.ends_with("_my-task"),
+            "should end with _my-task, got: {}",
+            name
+        );
+    }
+
+    #[test]
+    fn resolve_tpm_dir_returns_none_when_no_tpm_dir() {
+        let dir = TempDir::new().unwrap();
+        let instance = create_test_instance("test", dir.path().to_str().unwrap());
+        assert!(resolve_tpm_dir(&instance).is_none());
+    }
+
+    #[test]
+    fn resolve_tpm_dir_finds_tpm_in_project_path() {
+        let dir = TempDir::new().unwrap();
+        let tpm = dir.path().join(".tpm");
+        std::fs::create_dir_all(&tpm).unwrap();
+        std::fs::write(tpm.join("STATE.md"), "# State\n").unwrap();
+
+        let instance = create_test_instance("test", dir.path().to_str().unwrap());
+        let resolved = resolve_tpm_dir(&instance);
+        assert_eq!(resolved, Some(tpm));
+    }
+
+    #[test]
+    fn resolve_tpm_dir_requires_state_md() {
+        let dir = TempDir::new().unwrap();
+        let tpm = dir.path().join(".tpm");
+        std::fs::create_dir_all(&tpm).unwrap();
+        // .tpm/ exists but no STATE.md inside
+        std::fs::write(tpm.join("PLAN.md"), "# Plan\n").unwrap();
+
+        let instance = create_test_instance("test", dir.path().to_str().unwrap());
+        assert!(resolve_tpm_dir(&instance).is_none());
+    }
+
+    #[test]
+    fn resolve_tpm_dir_prefers_main_repo_path() {
+        let main_repo = TempDir::new().unwrap();
+        let worktree = TempDir::new().unwrap();
+
+        // Put STATE.md in both locations
+        let main_tpm = main_repo.path().join(".tpm");
+        std::fs::create_dir_all(&main_tpm).unwrap();
+        std::fs::write(main_tpm.join("STATE.md"), "# Main\n").unwrap();
+
+        let wt_tpm = worktree.path().join(".tpm");
+        std::fs::create_dir_all(&wt_tpm).unwrap();
+        std::fs::write(wt_tpm.join("STATE.md"), "# WT\n").unwrap();
+
+        let mut instance = create_test_instance("test", worktree.path().to_str().unwrap());
+        instance.worktree_info = Some(crate::session::WorktreeInfo {
+            branch: "feature/test".to_string(),
+            main_repo_path: main_repo.path().to_string_lossy().to_string(),
+            managed_by_aoe: true,
+            created_at: chrono::Utc::now(),
+        });
+
+        let resolved = resolve_tpm_dir(&instance);
+        assert_eq!(resolved, Some(main_tpm));
+    }
+
+    #[test]
+    fn archive_tpm_artifacts_returns_false_when_no_tpm() {
+        let dir = TempDir::new().unwrap();
+        let instance = create_test_instance("test", dir.path().to_str().unwrap());
+        assert_eq!(archive_tpm_artifacts(&instance).unwrap(), false);
+    }
+
+    #[test]
+    #[serial]
+    fn archive_tpm_artifacts_copies_files_and_writes_metadata() {
+        let home_temp = TempDir::new().unwrap();
+        let _home = HomeGuard::set(home_temp.path());
+        let _xdg = XdgGuard::unset();
+
+        let project = TempDir::new().unwrap();
+        let tpm = project.path().join(".tpm");
+        std::fs::create_dir_all(&tpm).unwrap();
+        std::fs::write(tpm.join("STATE.md"), "# State content\n").unwrap();
+        std::fs::write(tpm.join("SUMMARY.md"), "# Summary content\n").unwrap();
+        // PLAN.md absent, should be skipped gracefully
+
+        let instance = create_test_instance("my-task", project.path().to_str().unwrap());
+        let result = archive_tpm_artifacts(&instance).unwrap();
+        assert!(result, "archival should have happened");
+
+        // Find the archive directory
+        let app_dir = crate::session::get_app_dir().unwrap();
+        let history_dir = app_dir.join("history");
+        assert!(history_dir.exists(), "history dir should exist");
+
+        let entries: Vec<_> = std::fs::read_dir(&history_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert_eq!(entries.len(), 1, "expected exactly one archive entry");
+
+        let archive_dir = entries[0].path();
+        let dir_name = archive_dir
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        assert!(
+            dir_name.ends_with("_my-task"),
+            "dir name should end with _my-task, got: {}",
+            dir_name
+        );
+        // Verify session ID prefix is embedded
+        let id_prefix = &instance.id[..8];
+        assert!(
+            dir_name.contains(id_prefix),
+            "dir name should contain id prefix {}, got: {}",
+            id_prefix,
+            dir_name
+        );
+
+        // Check copied files
+        assert!(archive_dir.join("STATE.md").is_file());
+        assert!(archive_dir.join("SUMMARY.md").is_file());
+        assert!(!archive_dir.join("PLAN.md").exists());
+
+        // Check content preserved
+        let state = std::fs::read_to_string(archive_dir.join("STATE.md")).unwrap();
+        assert_eq!(state, "# State content\n");
+
+        // Check metadata.json
+        let meta_str = std::fs::read_to_string(archive_dir.join("metadata.json")).unwrap();
+        let meta: serde_json::Value = serde_json::from_str(&meta_str).unwrap();
+        assert_eq!(meta["session_id"].as_str().unwrap(), instance.id);
+        assert_eq!(meta["title"].as_str().unwrap(), "my-task");
+        assert_eq!(
+            meta["project_path"].as_str().unwrap(),
+            project.path().to_str().unwrap()
+        );
+        assert!(meta["archived_at"].as_str().is_some());
     }
 }

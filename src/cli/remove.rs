@@ -113,6 +113,11 @@ pub async fn run(profile: &str, args: RemoveArgs) -> Result<()> {
                 }
             }
 
+            // Archive .tpm/ artifacts before worktree cleanup destroys them.
+            if let Err(e) = crate::tpm::archive_tpm_artifacts(&inst) {
+                eprintln!("Warning: failed to archive TPM artifacts: {}", e);
+            }
+
             let will_cleanup_worktree = needs_worktree_cleanup(&inst, &args);
             // Delete branch if explicitly requested, or if worktree is being
             // deleted and config says to also delete the branch.
