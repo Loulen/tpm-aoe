@@ -44,6 +44,9 @@ pub struct Config {
     pub sound: crate::sound::SoundConfig,
 
     #[serde(default)]
+    pub tpm: crate::tpm::TpmConfig,
+
+    #[serde(default)]
     pub app_state: AppStateConfig,
 
     #[serde(default)]

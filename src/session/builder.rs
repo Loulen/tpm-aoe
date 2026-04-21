@@ -48,6 +48,10 @@ pub struct InstanceParams {
     /// See `crate::tpm` for resolution rules and the shell snippet that gets
     /// merged in.
     pub tpm_tier: Option<crate::tpm::TpmTier>,
+    /// Maximum review/revision cycles for the TPM orchestrator.
+    pub tpm_review_passes: Option<u32>,
+    /// Agent slugs to disable for this TPM session.
+    pub tpm_disabled_agents: Vec<String>,
 }
 
 /// Result of building an instance, tracking what was created for cleanup purposes.
@@ -397,6 +401,21 @@ pub fn build_instance(
             tier,
         )?;
         instance.tpm_managed = true;
+
+        // Write TPM config to .tpm/config.json so the orchestrator can read it.
+        let disabled: Vec<String> = params
+            .tpm_disabled_agents
+            .iter()
+            .filter(|a| a.as_str() != "implementer")
+            .cloned()
+            .collect();
+        let tpm_config = crate::tpm::TpmConfig {
+            tier,
+            max_review_cycles: params.tpm_review_passes.filter(|&n| n > 0),
+            disabled_agents: disabled,
+        };
+        let project_path = std::path::Path::new(&instance.project_path);
+        crate::tpm::write_tpm_config(project_path, &tpm_config)?;
     }
 
     if params.sandbox {
@@ -527,6 +546,8 @@ mod tests {
             command_override: String::new(),
             extra_repo_paths: Vec::new(),
             tpm_tier: Some(crate::tpm::TpmTier::Fast),
+            tpm_review_passes: None,
+            tpm_disabled_agents: Vec::new(),
         };
 
         let result = build_instance(params, &[], "default").unwrap();
@@ -565,6 +586,8 @@ mod tests {
             command_override: String::new(),
             extra_repo_paths: Vec::new(),
             tpm_tier: None,
+            tpm_review_passes: None,
+            tpm_disabled_agents: Vec::new(),
         };
 
         let result = build_instance(params, &[], "default").unwrap();

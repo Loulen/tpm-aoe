@@ -42,6 +42,9 @@ pub struct ProfileConfig {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sound: Option<crate::sound::SoundConfigOverride>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tpm: Option<TpmConfigOverride>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -210,6 +213,16 @@ pub struct HooksConfigOverride {
     pub on_destroy: Option<Vec<String>>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TpmConfigOverride {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<crate::tpm::TpmTier>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_review_cycles: Option<Option<u32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disabled_agents: Option<Vec<String>>,
+}
+
 /// Load profile-specific config. Returns empty config if file doesn't exist.
 pub fn load_profile_config(profile: &str) -> Result<ProfileConfig> {
     let path = get_profile_config_path(profile)?;
@@ -248,6 +261,7 @@ pub fn profile_has_overrides(config: &ProfileConfig) -> bool {
         || config.session.is_some()
         || config.hooks.is_some()
         || config.sound.is_some()
+        || config.tpm.is_some()
 }
 
 /// Load effective config for a profile (global + profile overrides merged)
@@ -385,6 +399,19 @@ pub fn apply_tmux_overrides(target: &mut super::config::TmuxConfig, source: &Tmu
     }
 }
 
+/// Apply TPM config overrides to a target config.
+pub fn apply_tpm_overrides(target: &mut crate::tpm::TpmConfig, source: &TpmConfigOverride) {
+    if let Some(tier) = source.tier {
+        target.tier = tier;
+    }
+    if let Some(ref max_review_cycles) = source.max_review_cycles {
+        target.max_review_cycles = *max_review_cycles;
+    }
+    if let Some(ref disabled_agents) = source.disabled_agents {
+        target.disabled_agents = disabled_agents.clone();
+    }
+}
+
 /// Merge profile overrides into global config
 pub fn merge_configs(mut global: Config, profile: &ProfileConfig) -> Config {
     if let Some(ref theme_override) = profile.theme {
@@ -436,6 +463,10 @@ pub fn merge_configs(mut global: Config, profile: &ProfileConfig) -> Config {
 
     if let Some(ref sound_override) = profile.sound {
         crate::sound::apply_sound_overrides(&mut global.sound, sound_override);
+    }
+
+    if let Some(ref tpm_override) = profile.tpm {
+        apply_tpm_overrides(&mut global.tpm, tpm_override);
     }
 
     global
