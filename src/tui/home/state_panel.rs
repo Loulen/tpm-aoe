@@ -10,6 +10,7 @@ use std::time::Instant;
 
 use ratatui::prelude::*;
 use ratatui::widgets::*;
+use unicode_width::UnicodeWidthStr;
 
 use crate::session::Instance;
 use crate::tui::styles::Theme;
@@ -426,12 +427,12 @@ fn wrap_line(text: &str, style: Style, width: usize, indent: &str) -> Vec<Line<'
     let mut first = true;
 
     while !remaining.is_empty() {
-        let max = if first {
+        let max_cols = if first {
             width
         } else {
-            width.saturating_sub(indent.len())
+            width.saturating_sub(UnicodeWidthStr::width(indent))
         };
-        if remaining.len() <= max {
+        if UnicodeWidthStr::width(remaining) <= max_cols {
             let line_text = if first {
                 remaining.to_string()
             } else {
@@ -441,11 +442,14 @@ fn wrap_line(text: &str, style: Style, width: usize, indent: &str) -> Vec<Line<'
             break;
         }
 
-        // Find a word boundary to break at
-        let break_at = remaining[..max]
+        // Find the byte offset where cumulative display width reaches max_cols.
+        let byte_limit = byte_offset_for_width(remaining, max_cols);
+
+        // Find a word boundary (space) to break at within that range.
+        let break_at = remaining[..byte_limit]
             .rfind(' ')
             .map(|pos| pos + 1)
-            .unwrap_or(max);
+            .unwrap_or(byte_limit);
 
         let (chunk, rest) = remaining.split_at(break_at);
         let line_text = if first {
@@ -463,6 +467,21 @@ fn wrap_line(text: &str, style: Style, width: usize, indent: &str) -> Vec<Line<'
     }
 
     result
+}
+
+/// Return the byte offset into `s` such that the substring `s[..offset]`
+/// has a display width of at most `max_cols` columns and `offset` falls
+/// on a char boundary.
+fn byte_offset_for_width(s: &str, max_cols: usize) -> usize {
+    let mut cols = 0;
+    for (i, c) in s.char_indices() {
+        let w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+        if cols + w > max_cols {
+            return i;
+        }
+        cols += w;
+    }
+    s.len()
 }
 
 #[cfg(test)]
@@ -602,5 +621,42 @@ mod tests {
         let table = vec!["| foo | barbaz |", "|---|---|", "| a | b |"];
         let widths = compute_table_col_widths(&table, 80);
         assert_eq!(widths, vec![3, 6]); // "foo"=3, "barbaz"=6
+    }
+
+    #[test]
+    fn test_wrap_line_multibyte_no_panic() {
+        let style = Style::default();
+        // Em-dash is 3 bytes in UTF-8; wrapping must not panic on it.
+        let text = "Planning phase \u{2014} determine the requirements for the feature";
+        let result = wrap_line(text, style, 20, "");
+        assert!(result.len() > 1);
+        for line in &result {
+            assert!(line.width() <= 20);
+        }
+    }
+
+    #[test]
+    fn test_wrap_line_cjk_chars() {
+        let style = Style::default();
+        // CJK characters are 2 columns wide each.
+        let text = "\u{4f60}\u{597d}\u{4e16}\u{754c} hello";
+        let result = wrap_line(text, style, 10, "");
+        assert!(!result.is_empty());
+        for line in &result {
+            assert!(line.width() <= 10);
+        }
+    }
+
+    #[test]
+    fn test_byte_offset_for_width() {
+        // ASCII: 1 byte = 1 column
+        assert_eq!(byte_offset_for_width("hello", 3), 3);
+        // Em-dash (\u{2014}) is 1 column wide, 3 bytes
+        assert_eq!(byte_offset_for_width("\u{2014}abc", 1), 3);
+        // CJK char is 2 columns wide, 3 bytes
+        assert_eq!(byte_offset_for_width("\u{4f60}x", 1), 0);
+        assert_eq!(byte_offset_for_width("\u{4f60}x", 2), 3);
+        // Width larger than string returns full length
+        assert_eq!(byte_offset_for_width("hi", 10), 2);
     }
 }

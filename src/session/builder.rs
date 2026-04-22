@@ -48,6 +48,10 @@ pub struct InstanceParams {
     /// See `crate::tpm` for resolution rules and the shell snippet that gets
     /// merged in.
     pub tpm_tier: Option<crate::tpm::TpmTier>,
+    /// Maximum review/revision cycles for the TPM orchestrator.
+    pub tpm_review_passes: Option<u32>,
+    /// Agent slugs to disable for this TPM session.
+    pub tpm_disabled_agents: Vec<String>,
 }
 
 /// Result of building an instance, tracking what was created for cleanup purposes.
@@ -396,6 +400,22 @@ pub fn build_instance(
             &instance.extra_args,
             tier,
         )?;
+        instance.tpm_managed = true;
+
+        // Write TPM config to .tpm/config.json so the orchestrator can read it.
+        let disabled: Vec<String> = params
+            .tpm_disabled_agents
+            .iter()
+            .filter(|a| a.as_str() != "implementer")
+            .cloned()
+            .collect();
+        let tpm_config = crate::tpm::TpmConfig {
+            tier,
+            max_review_cycles: params.tpm_review_passes.filter(|&n| n > 0),
+            disabled_agents: disabled,
+        };
+        let project_path = std::path::Path::new(&instance.project_path);
+        crate::tpm::write_tpm_config(project_path, &tpm_config)?;
     }
 
     if params.sandbox {
@@ -488,6 +508,94 @@ fn resolve_title(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
+
+    #[test]
+    #[serial]
+    fn test_build_instance_sets_tpm_managed_when_tier_present() {
+        let temp = tempfile::TempDir::new().unwrap();
+        // Isolate HOME so config resolution uses temp dirs
+        std::env::set_var("HOME", temp.path());
+        #[cfg(target_os = "linux")]
+        std::env::set_var("XDG_CONFIG_HOME", temp.path().join(".config"));
+
+        // Set up a fake orchestrator prompt so build_tpm_extra_args resolves
+        let tpm_dir = temp.path().join("tpm-plugin");
+        let agents_dir = tpm_dir.join("agents");
+        std::fs::create_dir_all(&agents_dir).unwrap();
+        std::fs::write(agents_dir.join("orchestrator.md"), "# Orchestrator\n").unwrap();
+        std::env::set_var("TPM_WORKFLOW_PATH", &tpm_dir);
+
+        // Create project directory
+        let project_dir = temp.path().join("project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+
+        let params = InstanceParams {
+            title: "tpm-test".to_string(),
+            path: project_dir.to_string_lossy().to_string(),
+            group: String::new(),
+            tool: "claude".to_string(),
+            worktree_branch: None,
+            create_new_branch: false,
+            worktree_from_branch: None,
+            sandbox: false,
+            sandbox_image: String::new(),
+            yolo_mode: false,
+            extra_env: Vec::new(),
+            extra_args: String::new(),
+            command_override: String::new(),
+            extra_repo_paths: Vec::new(),
+            tpm_tier: Some(crate::tpm::TpmTier::Fast),
+            tpm_review_passes: None,
+            tpm_disabled_agents: Vec::new(),
+        };
+
+        let result = build_instance(params, &[], "default").unwrap();
+        assert!(
+            result.instance.tpm_managed,
+            "tpm_managed should be true when tpm_tier is Some"
+        );
+
+        std::env::remove_var("TPM_WORKFLOW_PATH");
+    }
+
+    #[test]
+    #[serial]
+    fn test_build_instance_tpm_managed_false_without_tier() {
+        let temp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("HOME", temp.path());
+        #[cfg(target_os = "linux")]
+        std::env::set_var("XDG_CONFIG_HOME", temp.path().join(".config"));
+
+        let project_dir = temp.path().join("project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+
+        let params = InstanceParams {
+            title: "regular-test".to_string(),
+            path: project_dir.to_string_lossy().to_string(),
+            group: String::new(),
+            tool: "claude".to_string(),
+            worktree_branch: None,
+            create_new_branch: false,
+            worktree_from_branch: None,
+            sandbox: false,
+            sandbox_image: String::new(),
+            yolo_mode: false,
+            extra_env: Vec::new(),
+            extra_args: String::new(),
+            command_override: String::new(),
+            extra_repo_paths: Vec::new(),
+            tpm_tier: None,
+            tpm_review_passes: None,
+            tpm_disabled_agents: Vec::new(),
+        };
+
+        let result = build_instance(params, &[], "default").unwrap();
+        assert!(
+            !result.instance.tpm_managed,
+            "tpm_managed should be false when tpm_tier is None"
+        );
+    }
 
     #[test]
     fn test_empty_title_with_worktree_uses_branch_name() {

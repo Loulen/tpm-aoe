@@ -22,6 +22,7 @@ pub enum SettingsCategory {
     Session,
     Sound,
     Hooks,
+    Tpm,
 }
 
 impl SettingsCategory {
@@ -35,6 +36,7 @@ impl SettingsCategory {
             Self::Session => "Session",
             Self::Sound => "Sound",
             Self::Hooks => "Hooks",
+            Self::Tpm => "TPM",
         }
     }
 }
@@ -92,6 +94,10 @@ pub enum FieldKey {
     HookOnCreate,
     HookOnLaunch,
     HookOnDestroy,
+    // TPM
+    TpmDefaultTier,
+    TpmMaxReviewCycles,
+    TpmDisabledAgents,
 }
 
 /// Resolve a field value from global config and optional profile override.
@@ -252,6 +258,7 @@ pub fn build_fields_for_category(
         SettingsCategory::Session => build_session_fields(scope, global, profile),
         SettingsCategory::Sound => build_sound_fields(scope, global, profile),
         SettingsCategory::Hooks => build_hooks_fields(scope, global, profile),
+        SettingsCategory::Tpm => build_tpm_fields(scope, global, profile),
     }
 }
 
@@ -1253,6 +1260,87 @@ fn build_hooks_fields(
     ]
 }
 
+fn build_tpm_fields(
+    scope: SettingsScope,
+    global: &Config,
+    profile: &ProfileConfig,
+) -> Vec<SettingField> {
+    let tpm = profile.tpm.as_ref();
+
+    let (tier, o1) = resolve_value(scope, global.tpm.tier, tpm.and_then(|t| t.tier));
+
+    let tier_selected = match tier {
+        crate::tpm::TpmTier::Fast => 0,
+        crate::tpm::TpmTier::Standard => 1,
+        crate::tpm::TpmTier::Prod => 2,
+    };
+    let global_tier_selected = match global.tpm.tier {
+        crate::tpm::TpmTier::Fast => 0,
+        crate::tpm::TpmTier::Standard => 1,
+        crate::tpm::TpmTier::Prod => 2,
+    };
+    let tier_options = vec!["Fast".into(), "Standard".into(), "Prod".into()];
+
+    // max_review_cycles: Option<u32> in TpmConfig, Option<Option<u32>> in override
+    let (max_review_cycles, o2) = resolve_value(
+        scope,
+        global.tpm.max_review_cycles.unwrap_or(0) as u64,
+        tpm.and_then(|t| t.max_review_cycles.map(|v| v.unwrap_or(0) as u64)),
+    );
+
+    // disabled_agents: Vec<String> displayed as comma-separated text
+    let (disabled_agents, o3) = resolve_value(
+        scope,
+        global.tpm.disabled_agents.clone(),
+        tpm.and_then(|t| t.disabled_agents.clone()),
+    );
+    let disabled_agents_text = disabled_agents.join(", ");
+    let global_disabled_agents_text = global.tpm.disabled_agents.join(", ");
+
+    vec![
+        SettingField {
+            key: FieldKey::TpmDefaultTier,
+            label: "Default Tier",
+            description: "Orchestration tier for new TPM sessions (fast/standard/prod)",
+            value: FieldValue::Select {
+                selected: tier_selected,
+                options: tier_options.clone(),
+            },
+            category: SettingsCategory::Tpm,
+            has_override: o1,
+            inherited_display: inherited_if(
+                o1,
+                FieldValue::Select {
+                    selected: global_tier_selected,
+                    options: tier_options,
+                },
+            ),
+        },
+        SettingField {
+            key: FieldKey::TpmMaxReviewCycles,
+            label: "Max Review Cycles",
+            description: "Maximum review/revision cycles (0 = use tier default)",
+            value: FieldValue::Number(max_review_cycles),
+            category: SettingsCategory::Tpm,
+            has_override: o2,
+            inherited_display: inherited_if(
+                o2,
+                FieldValue::Number(global.tpm.max_review_cycles.unwrap_or(0) as u64),
+            ),
+        },
+        SettingField {
+            key: FieldKey::TpmDisabledAgents,
+            label: "Disabled Agents",
+            description:
+                "Comma-separated agent slugs to disable (e.g. principal-engineer, end-user-simulator). Implementer cannot be disabled.",
+            value: FieldValue::Text(disabled_agents_text),
+            category: SettingsCategory::Tpm,
+            has_override: o3,
+            inherited_display: inherited_if(o3, FieldValue::Text(global_disabled_agents_text)),
+        },
+    ]
+}
+
 /// Apply a field's value back to the appropriate config.
 /// For profile scope, the value is always stored as an override.
 pub fn apply_field_to_config(
@@ -1393,8 +1481,31 @@ fn apply_field_to_global(field: &SettingField, config: &mut Config) {
         (FieldKey::HookOnCreate, FieldValue::List(v)) => config.hooks.on_create = v.clone(),
         (FieldKey::HookOnLaunch, FieldValue::List(v)) => config.hooks.on_launch = v.clone(),
         (FieldKey::HookOnDestroy, FieldValue::List(v)) => config.hooks.on_destroy = v.clone(),
+        // TPM
+        (FieldKey::TpmDefaultTier, FieldValue::Select { selected, .. }) => {
+            config.tpm.tier = match selected {
+                0 => crate::tpm::TpmTier::Fast,
+                2 => crate::tpm::TpmTier::Prod,
+                _ => crate::tpm::TpmTier::Standard,
+            };
+        }
+        (FieldKey::TpmMaxReviewCycles, FieldValue::Number(v)) => {
+            config.tpm.max_review_cycles = if *v == 0 { None } else { Some(*v as u32) };
+        }
+        (FieldKey::TpmDisabledAgents, FieldValue::Text(v)) => {
+            config.tpm.disabled_agents = parse_comma_separated_agents(v);
+        }
         _ => {}
     }
+}
+
+/// Parse a comma-separated string of agent slugs into a Vec, filtering out
+/// empty entries, whitespace, and the always-enabled "implementer" slug.
+fn parse_comma_separated_agents(text: &str) -> Vec<String> {
+    text.split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && s != "implementer")
+        .collect()
 }
 
 /// Apply a field to the profile config.
@@ -1640,6 +1751,27 @@ fn apply_field_to_profile(field: &SettingField, _global: &Config, config: &mut P
         }
         (FieldKey::HookOnDestroy, FieldValue::List(v)) => {
             set_profile_override(v.clone(), &mut config.hooks, |s, val| s.on_destroy = val);
+        }
+        // TPM
+        (FieldKey::TpmDefaultTier, FieldValue::Select { selected, .. }) => {
+            let tier = match selected {
+                0 => crate::tpm::TpmTier::Fast,
+                2 => crate::tpm::TpmTier::Prod,
+                _ => crate::tpm::TpmTier::Standard,
+            };
+            set_profile_override(tier, &mut config.tpm, |s, val| s.tier = val);
+        }
+        (FieldKey::TpmMaxReviewCycles, FieldValue::Number(v)) => {
+            let cycles = if *v == 0 { None } else { Some(*v as u32) };
+            use crate::session::TpmConfigOverride;
+            let s = config.tpm.get_or_insert_with(TpmConfigOverride::default);
+            s.max_review_cycles = Some(cycles);
+        }
+        (FieldKey::TpmDisabledAgents, FieldValue::Text(v)) => {
+            let agents = parse_comma_separated_agents(v);
+            use crate::session::TpmConfigOverride;
+            let s = config.tpm.get_or_insert_with(TpmConfigOverride::default);
+            s.disabled_agents = Some(agents);
         }
         _ => {}
     }

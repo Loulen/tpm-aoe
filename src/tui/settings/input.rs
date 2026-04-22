@@ -748,6 +748,22 @@ impl SettingsView {
                     h.on_destroy = None;
                 }
             }
+            // TPM
+            FieldKey::TpmDefaultTier => {
+                if let Some(ref mut t) = config.tpm {
+                    t.tier = None;
+                }
+            }
+            FieldKey::TpmMaxReviewCycles => {
+                if let Some(ref mut t) = config.tpm {
+                    t.max_review_cycles = None;
+                }
+            }
+            FieldKey::TpmDisabledAgents => {
+                if let Some(ref mut t) = config.tpm {
+                    t.disabled_agents = None;
+                }
+            }
         }
 
         // Sync repo_config when in Repo scope

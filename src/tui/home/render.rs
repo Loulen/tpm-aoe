@@ -464,6 +464,12 @@ impl HomeView {
 
         if let Item::Session { id, .. } = item {
             if let Some(inst) = self.get_instance(id) {
+                if inst.tpm_managed {
+                    line_spans.push(Span::styled(
+                        " TPM",
+                        Style::default().fg(theme.accent).bold(),
+                    ));
+                }
                 if let Some(ws_info) = &inst.workspace_info {
                     line_spans.push(Span::styled(
                         format!("  {} [{} repos]", ws_info.branch, ws_info.repos.len()),
