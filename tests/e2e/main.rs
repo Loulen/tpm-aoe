@@ -31,4 +31,5 @@ mod tui_launch;
 mod unified_view;
 
 mod events;
+mod tpm_artifacts;
 mod worktree_from;
