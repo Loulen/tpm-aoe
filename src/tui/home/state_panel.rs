@@ -647,6 +647,36 @@ mod tests {
         }
     }
 
+    /// AC-06: CJK string 日本語テスト wraps correctly at 2-cell width.
+    /// Each CJK character occupies 2 display columns, so the 6-char string
+    /// uses 12 columns total. At width 12 it fits; at width 8 it must wrap,
+    /// and each wrapped line must stay within the limit.
+    #[test]
+    fn test_wrap_line_cjk_nihongo_test() {
+        let style = Style::default();
+        // 日本語テスト = 6 CJK chars = 12 display columns
+        let text = "\u{65E5}\u{672C}\u{8A9E}\u{30C6}\u{30B9}\u{30C8}";
+
+        // Fits in 12 columns
+        let wide = wrap_line(text, style, 12, "");
+        assert_eq!(wide.len(), 1, "should fit in width=12");
+
+        // Must wrap in 8 columns
+        let narrow = wrap_line(text, style, 8, "");
+        assert!(
+            narrow.len() > 1,
+            "6 CJK chars (12 cols) should wrap at width=8, got {} line(s)",
+            narrow.len()
+        );
+        for line in &narrow {
+            assert!(
+                line.width() <= 8,
+                "wrapped line exceeds width 8: width={}",
+                line.width()
+            );
+        }
+    }
+
     #[test]
     fn test_byte_offset_for_width() {
         // ASCII: 1 byte = 1 column
