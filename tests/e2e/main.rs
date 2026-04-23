@@ -33,4 +33,5 @@ mod unified_view;
 mod events;
 mod tpm_artifacts;
 mod tpm_tui_delete;
+mod tui_config_settings;
 mod worktree_from;
