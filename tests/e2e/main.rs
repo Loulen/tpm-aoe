@@ -32,4 +32,5 @@ mod unified_view;
 
 mod events;
 mod tpm_artifacts;
+mod tui_state_panel;
 mod worktree_from;
