@@ -23,5 +23,6 @@ mod new_session;
 mod profile_picker;
 mod sandbox;
 mod tpm;
+mod tpm_tier;
 mod tui_launch;
 mod unified_view;

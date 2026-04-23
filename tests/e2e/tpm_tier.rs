@@ -1,0 +1,338 @@
+//! E2E tests for TPM tier system, plugin resolution, and system prompt preamble.
+//!
+//! Validates Feature 3 (tier), Feature 2 (plugin resolution), and Feature 11
+//! (system prompt override preamble) through user scenarios: creating TPM
+//! sessions with different tiers, verifying sessions.json + .tpm/config.json,
+//! and testing error paths when the plugin is missing.
+//!
+//! Uses the same `TPM_WORKFLOW_PATH` env override pattern as `tpm.rs`, with a
+//! fake `agents/orchestrator.md` in a tempdir.
+
+use serial_test::serial;
+use std::path::Path;
+use std::process::Command;
+use tempfile::TempDir;
+
+use crate::harness::TuiTestHarness;
+
+// ---------------------------------------------------------------------------
+// Helpers (shared with tpm.rs but duplicated to keep the new file self-contained
+// and avoid merge conflicts per D-02)
+// ---------------------------------------------------------------------------
+
+/// Read the persisted `sessions.json` from the harness's isolated profile dir.
+fn read_sessions(h: &TuiTestHarness) -> serde_json::Value {
+    let path = if cfg!(target_os = "linux") {
+        h.home_path()
+            .join(".config/agent-of-empires/profiles/default/sessions.json")
+    } else {
+        h.home_path()
+            .join(".agent-of-empires/profiles/default/sessions.json")
+    };
+    let raw = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e));
+    serde_json::from_str(&raw).expect("invalid sessions JSON")
+}
+
+/// Drop a fake `agents/orchestrator.md` under `root`. Returns the path so the
+/// test can assert on the resolved value.
+fn write_fake_orchestrator(root: &Path) -> std::path::PathBuf {
+    let agents = root.join("agents");
+    std::fs::create_dir_all(&agents).expect("create agents dir");
+    let file = agents.join("orchestrator.md");
+    std::fs::write(&file, "# Fake Orchestrator\n").expect("write orchestrator.md");
+    file
+}
+
+/// Create a harness with a git-initialized project and a fake plugin dir.
+/// Returns (harness, plugin_dir TempDir, orchestrator path).
+fn setup_tpm_harness(name: &str) -> (TuiTestHarness, TempDir, std::path::PathBuf) {
+    let h = TuiTestHarness::new(name);
+    let project = h.project_path();
+
+    // git init so the project is a valid repo (needed for --tpm to work)
+    let git_init = Command::new("git")
+        .arg("init")
+        .arg("--quiet")
+        .arg(&project)
+        .output()
+        .expect("git init");
+    assert!(
+        git_init.status.success(),
+        "git init failed: {}",
+        String::from_utf8_lossy(&git_init.stderr)
+    );
+
+    let plugin_dir = TempDir::new().expect("plugin tempdir");
+    let orch_path = write_fake_orchestrator(plugin_dir.path());
+
+    (h, plugin_dir, orch_path)
+}
+
+/// Find the session entry with the given title in sessions.json.
+fn find_session<'a>(sessions: &'a serde_json::Value, title: &str) -> &'a serde_json::Value {
+    sessions
+        .as_array()
+        .and_then(|arr| arr.iter().find(|s| s["title"] == title))
+        .unwrap_or_else(|| panic!("session with title {:?} not found in sessions.json", title))
+}
+
+/// Read `.tpm/config.json` from the project directory inside the harness.
+fn read_tpm_config(h: &TuiTestHarness) -> serde_json::Value {
+    let path = h.project_path().join(".tpm/config.json");
+    let raw = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e));
+    serde_json::from_str(&raw).expect("invalid .tpm/config.json")
+}
+
+// ---------------------------------------------------------------------------
+// AC-01: --tpm with no tier value defaults to standard
+// ---------------------------------------------------------------------------
+
+#[test]
+#[serial]
+fn aoe_add_tpm_default_tier_sets_tpm_managed_and_injects_prompt() {
+    let (h, plugin_dir, orch_path) = setup_tpm_harness("tpm_tier_default");
+    let project = h.project_path();
+
+    let output = h.run_cli_with_env(
+        &[
+            "add",
+            project.to_str().unwrap(),
+            "--tpm",
+            "-t",
+            "Standard TPM",
+        ],
+        &[("TPM_WORKFLOW_PATH", plugin_dir.path())],
+    );
+    assert!(
+        output.status.success(),
+        "aoe add --tpm failed.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let sessions = read_sessions(&h);
+    let session = find_session(&sessions, "Standard TPM");
+
+    // tpm_managed must be true
+    assert_eq!(
+        session["tpm_managed"].as_bool(),
+        Some(true),
+        "tpm_managed should be true for --tpm session"
+    );
+
+    // extra_args must contain --append-system-prompt and the orchestrator path
+    let extra_args = session["extra_args"].as_str().unwrap_or("");
+    assert!(
+        extra_args.contains("--append-system-prompt"),
+        "extra_args should contain --append-system-prompt, got: {}",
+        extra_args
+    );
+    assert!(
+        extra_args.contains(orch_path.to_string_lossy().as_ref()),
+        "extra_args should reference orchestrator path. extra_args={}, expected substring={}",
+        extra_args,
+        orch_path.display()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// AC-02: --tpm fast creates config.json with tier "fast"
+// ---------------------------------------------------------------------------
+
+#[test]
+#[serial]
+fn aoe_add_tpm_fast_tier_writes_config_json() {
+    let (h, plugin_dir, _orch_path) = setup_tpm_harness("tpm_tier_fast");
+    let project = h.project_path();
+
+    let output = h.run_cli_with_env(
+        &[
+            "add",
+            project.to_str().unwrap(),
+            "--tpm",
+            "fast",
+            "-t",
+            "Fast TPM",
+        ],
+        &[("TPM_WORKFLOW_PATH", plugin_dir.path())],
+    );
+    assert!(
+        output.status.success(),
+        "aoe add --tpm fast failed.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // sessions.json: tpm_managed must be true
+    let sessions = read_sessions(&h);
+    let session = find_session(&sessions, "Fast TPM");
+    assert_eq!(
+        session["tpm_managed"].as_bool(),
+        Some(true),
+        "tpm_managed should be true"
+    );
+
+    // .tpm/config.json: tier must be "fast"
+    let config = read_tpm_config(&h);
+    assert_eq!(
+        config["tier"].as_str(),
+        Some("fast"),
+        "config.json tier should be 'fast', got: {}",
+        config
+    );
+}
+
+// ---------------------------------------------------------------------------
+// AC-03: --tpm prod creates config.json with tier "prod"
+// ---------------------------------------------------------------------------
+
+#[test]
+#[serial]
+fn aoe_add_tpm_prod_tier_writes_config_json() {
+    let (h, plugin_dir, _orch_path) = setup_tpm_harness("tpm_tier_prod");
+    let project = h.project_path();
+
+    let output = h.run_cli_with_env(
+        &[
+            "add",
+            project.to_str().unwrap(),
+            "--tpm",
+            "prod",
+            "-t",
+            "Prod TPM",
+        ],
+        &[("TPM_WORKFLOW_PATH", plugin_dir.path())],
+    );
+    assert!(
+        output.status.success(),
+        "aoe add --tpm prod failed.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // .tpm/config.json: tier must be "prod"
+    let config = read_tpm_config(&h);
+    assert_eq!(
+        config["tier"].as_str(),
+        Some("prod"),
+        "config.json tier should be 'prod', got: {}",
+        config
+    );
+}
+
+// ---------------------------------------------------------------------------
+// AC-04: preamble is injected in extra_args
+// ---------------------------------------------------------------------------
+
+#[test]
+#[serial]
+fn aoe_add_tpm_injects_preamble_in_extra_args() {
+    let (h, plugin_dir, _orch_path) = setup_tpm_harness("tpm_preamble");
+    let project = h.project_path();
+
+    let output = h.run_cli_with_env(
+        &[
+            "add",
+            project.to_str().unwrap(),
+            "--tpm",
+            "-t",
+            "Preamble check",
+        ],
+        &[("TPM_WORKFLOW_PATH", plugin_dir.path())],
+    );
+    assert!(
+        output.status.success(),
+        "aoe add --tpm failed.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let sessions = read_sessions(&h);
+    let session = find_session(&sessions, "Preamble check");
+    let extra_args = session["extra_args"].as_str().unwrap_or("");
+
+    assert!(
+        extra_args.contains("SYSTEM PROMPT OVERRIDE"),
+        "extra_args should contain the preamble opening 'SYSTEM PROMPT OVERRIDE'. got: {}",
+        extra_args
+    );
+}
+
+// ---------------------------------------------------------------------------
+// AC-05: missing plugin produces non-zero exit + helpful error
+// ---------------------------------------------------------------------------
+
+#[test]
+#[serial]
+fn aoe_add_tpm_without_plugin_produces_helpful_error() {
+    let h = TuiTestHarness::new("tpm_tier_no_plugin");
+    let project = h.project_path();
+
+    // No TPM_WORKFLOW_PATH, no plugin in isolated HOME
+    let output = h.run_cli_with_env(
+        &["add", project.to_str().unwrap(), "-t", "No Plugin", "--tpm"],
+        &[],
+    );
+
+    assert!(
+        !output.status.success(),
+        "aoe add --tpm should fail without plugin.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("orchestrator")
+            || combined.contains("tpm-workflow")
+            || combined.contains("TPM_WORKFLOW_PATH"),
+        "error should mention orchestrator, tpm-workflow, or TPM_WORKFLOW_PATH. combined: {}",
+        combined
+    );
+}
+
+// ---------------------------------------------------------------------------
+// AC-06: preamble constant is shell-safe (supplementary unit test)
+// ---------------------------------------------------------------------------
+
+/// The TPM_PREAMBLE constant is not publicly exported, but we can verify its
+/// shell safety by inspecting what `extra_args_snippet` produces. The preamble
+/// is embedded in the double-quoted argument; single quotes and backslashes
+/// would break the bash wrapping tmux uses.
+///
+/// This is a supplementary unit test (justified: shell safety cannot be
+/// observed from CLI output, only from inspecting the constant's content).
+#[test]
+fn preamble_constant_contains_no_single_quotes_or_backslashes() {
+    // Build a snippet and extract the part between the opening " and $(cat
+    // That region is the preamble.
+    let snippet = agent_of_empires::tpm::extra_args_snippet(std::path::Path::new("/tmp/test.md"));
+
+    // The snippet format is: --append-system-prompt "<preamble>$(cat ...)"
+    // Extract the preamble by finding the content between first " and $(cat
+    let after_quote = snippet
+        .find('"')
+        .map(|i| &snippet[i + 1..])
+        .expect("snippet should contain opening quote");
+    let preamble_end = after_quote
+        .find("$(cat")
+        .expect("snippet should contain $(cat");
+    let preamble = &after_quote[..preamble_end];
+
+    assert!(
+        !preamble.contains('\''),
+        "preamble must not contain single quotes for shell safety. got: {}",
+        preamble
+    );
+    assert!(
+        !preamble.contains('\\'),
+        "preamble must not contain backslashes for shell safety. got: {}",
+        preamble
+    );
+}
