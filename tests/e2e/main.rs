@@ -29,3 +29,4 @@ mod tui_launch;
 mod unified_view;
 
 mod events;
+mod worktree_from;
