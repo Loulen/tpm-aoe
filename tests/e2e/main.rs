@@ -25,3 +25,5 @@ mod sandbox;
 mod tpm;
 mod tui_launch;
 mod unified_view;
+
+mod events;
