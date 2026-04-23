@@ -1353,6 +1353,31 @@ mod tests {
         assert_eq!(result.len(), MAX_TITLE_LEN);
     }
 
+    /// AC-05 (supplementary, justified: title sanitization edge cases are
+    /// unreachable from CLI without crafting pathological session titles;
+    /// `sanitize_title` is private so must be tested in-module).
+    #[test]
+    fn sanitize_title_tpm_input_produces_safe_chars_only() {
+        let result = sanitize_title("TPM: task #1!@$");
+        assert!(
+            result
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ' ')),
+            "sanitize_title produced unsafe characters: {:?}",
+            result
+        );
+        assert!(
+            !result.is_empty(),
+            "non-empty input should produce non-empty output"
+        );
+        // Verify the colons, hash, exclamation, at-sign, and dollar are gone
+        assert!(!result.contains(':'));
+        assert!(!result.contains('#'));
+        assert!(!result.contains('!'));
+        assert!(!result.contains('@'));
+        assert!(!result.contains('$'));
+    }
+
     #[test]
     fn archive_dir_name_falls_back_to_id_on_empty_title() {
         let instance = create_test_instance("", "/tmp/test");
