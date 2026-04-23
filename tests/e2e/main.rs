@@ -22,6 +22,7 @@ mod errors;
 mod new_session;
 mod profile_picker;
 mod sandbox;
+mod send_keys;
 mod tpm;
 mod tui_launch;
 mod unified_view;
