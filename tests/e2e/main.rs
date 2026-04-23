@@ -24,6 +24,7 @@ mod profile_picker;
 mod sandbox;
 mod send_keys;
 mod tpm;
+mod tpm_tier;
 mod tui_launch;
 mod unified_view;
 
