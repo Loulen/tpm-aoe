@@ -25,6 +25,7 @@ mod profile_template;
 mod sandbox;
 mod send_keys;
 mod tpm;
+mod tpm_config;
 mod tpm_tier;
 mod tui_launch;
 mod unified_view;
