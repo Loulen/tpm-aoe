@@ -21,6 +21,7 @@ mod cli;
 mod errors;
 mod new_session;
 mod profile_picker;
+mod profile_template;
 mod sandbox;
 mod send_keys;
 mod tpm;
