@@ -44,7 +44,26 @@ struct TmuxEnvGuard {
 }
 
 impl TmuxEnvGuard {
+    /// # Warning: default tmux server side-effect
+    ///
+    /// This temporarily sets `HOME` in the default tmux server's global
+    /// environment. During the guard's lifetime (~15s per test), any new
+    /// tmux windows or panes on the default server will inherit the fake
+    /// HOME. The original value is restored on drop.
+    ///
+    /// This is acceptable for CI (isolated environment) but can be
+    /// surprising when running tests on a developer workstation with an
+    /// active tmux session. The `#[serial]` attribute on the test
+    /// functions prevents concurrent test runs from conflicting, but
+    /// other tmux activity during the test window may be affected.
     fn set(fake_home: &Path) -> Self {
+        eprintln!(
+            "WARNING: TmuxEnvGuard is temporarily overriding the default tmux server's \
+             global HOME to '{}'. New tmux windows may inherit this fake HOME until the \
+             guard is dropped (~15s).",
+            fake_home.display()
+        );
+
         // Probe whether a tmux server is already running.
         let server_was_running = Command::new("tmux")
             .args(["list-sessions"])
@@ -228,17 +247,19 @@ fn wait_for_captured_prompt(home: &Path, timeout: Duration) -> String {
     }
 }
 
-/// Kill any tmux sessions whose name contains `substring` on the default
-/// tmux server. More targeted than prefix matching to avoid killing unrelated
-/// user sessions.
+/// Kill any tmux sessions whose name contains `aoe_{substring}` on the default
+/// tmux server. The `aoe_` prefix ensures we only match AoE-created sessions
+/// (naming format: `aoe_{sanitized_title}_{8char_id}`), avoiding false positives
+/// against real user sessions.
 fn cleanup_tmux_sessions_containing(substring: &str) {
+    let prefixed = format!("aoe_{substring}");
     let output = Command::new("tmux")
         .args(["list-sessions", "-F", "#{session_name}"])
         .output();
     if let Ok(out) = output {
         let names = String::from_utf8_lossy(&out.stdout);
         for name in names.lines() {
-            if name.contains(substring) {
+            if name.contains(&prefixed) {
                 let _ = Command::new("tmux")
                     .args(["kill-session", "-t", name])
                     .output();
