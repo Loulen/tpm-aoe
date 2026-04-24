@@ -9,81 +9,9 @@
 //! fake `agents/orchestrator.md` in a tempdir.
 
 use serial_test::serial;
-use std::path::Path;
-use std::process::Command;
-use tempfile::TempDir;
 
 use crate::harness::TuiTestHarness;
-
-// ---------------------------------------------------------------------------
-// Helpers (shared with tpm.rs but duplicated to keep the new file self-contained
-// and avoid merge conflicts per D-02)
-// ---------------------------------------------------------------------------
-
-/// Read the persisted `sessions.json` from the harness's isolated profile dir.
-fn read_sessions(h: &TuiTestHarness) -> serde_json::Value {
-    let path = if cfg!(target_os = "linux") {
-        h.home_path()
-            .join(".config/agent-of-empires/profiles/default/sessions.json")
-    } else {
-        h.home_path()
-            .join(".agent-of-empires/profiles/default/sessions.json")
-    };
-    let raw = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e));
-    serde_json::from_str(&raw).expect("invalid sessions JSON")
-}
-
-/// Drop a fake `agents/orchestrator.md` under `root`. Returns the path so the
-/// test can assert on the resolved value.
-fn write_fake_orchestrator(root: &Path) -> std::path::PathBuf {
-    let agents = root.join("agents");
-    std::fs::create_dir_all(&agents).expect("create agents dir");
-    let file = agents.join("orchestrator.md");
-    std::fs::write(&file, "# Fake Orchestrator\n").expect("write orchestrator.md");
-    file
-}
-
-/// Create a harness with a git-initialized project and a fake plugin dir.
-/// Returns (harness, plugin_dir TempDir, orchestrator path).
-fn setup_tpm_harness(name: &str) -> (TuiTestHarness, TempDir, std::path::PathBuf) {
-    let h = TuiTestHarness::new(name);
-    let project = h.project_path();
-
-    // git init so the project is a valid repo (needed for --tpm to work)
-    let git_init = Command::new("git")
-        .arg("init")
-        .arg("--quiet")
-        .arg(&project)
-        .output()
-        .expect("git init");
-    assert!(
-        git_init.status.success(),
-        "git init failed: {}",
-        String::from_utf8_lossy(&git_init.stderr)
-    );
-
-    let plugin_dir = TempDir::new().expect("plugin tempdir");
-    let orch_path = write_fake_orchestrator(plugin_dir.path());
-
-    (h, plugin_dir, orch_path)
-}
-
-/// Find the session entry with the given title in sessions.json.
-fn find_session<'a>(sessions: &'a serde_json::Value, title: &str) -> &'a serde_json::Value {
-    sessions
-        .as_array()
-        .and_then(|arr| arr.iter().find(|s| s["title"] == title))
-        .unwrap_or_else(|| panic!("session with title {:?} not found in sessions.json", title))
-}
-
-/// Read `.tpm/config.json` from the project directory inside the harness.
-fn read_tpm_config(h: &TuiTestHarness) -> serde_json::Value {
-    let path = h.project_path().join(".tpm/config.json");
-    let raw = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e));
-    serde_json::from_str(&raw).expect("invalid .tpm/config.json")
-}
+use crate::helpers::{find_session, read_sessions, read_tpm_config, setup_tpm_harness};
 
 // ---------------------------------------------------------------------------
 // AC-01: --tpm with no tier value defaults to standard

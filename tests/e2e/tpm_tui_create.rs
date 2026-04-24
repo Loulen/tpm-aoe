@@ -9,57 +9,12 @@
 //!   TPM sessions show " TPM".
 
 use serial_test::serial;
-use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 use tempfile::TempDir;
 
 use crate::harness::{require_tmux, TuiTestHarness};
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Drop a fake `agents/orchestrator.md` under `root`.
-fn write_fake_orchestrator(root: &Path) {
-    let agents = root.join("agents");
-    std::fs::create_dir_all(&agents).expect("create agents dir");
-    std::fs::write(agents.join("orchestrator.md"), "# Fake Orchestrator\n")
-        .expect("write orchestrator.md");
-}
-
-/// Seed `installed_plugins.json` + orchestrator cache in the harness temp HOME
-/// so `is_installed()` and `resolve_orchestrator()` succeed inside the TUI.
-fn seed_tpm_plugin(h: &TuiTestHarness) {
-    let home = h.home_path();
-
-    // installed_plugins.json tells is_installed() the plugin is present
-    let plugins_dir = home.join(".claude").join("plugins");
-    std::fs::create_dir_all(&plugins_dir).expect("create plugins dir");
-
-    let cache_dir = plugins_dir
-        .join("cache")
-        .join("tpm-workflow")
-        .join("tpm-workflow")
-        .join("0.1.0");
-    std::fs::create_dir_all(&cache_dir).expect("create cache dir");
-    write_fake_orchestrator(&cache_dir);
-
-    let installed = serde_json::json!({
-        "schema_version": 2,
-        "plugins": {
-            "tpm-workflow@tpm-workflow": [{
-                "version": "0.1.0",
-                "path": cache_dir.to_string_lossy()
-            }]
-        }
-    });
-    std::fs::write(
-        plugins_dir.join("installed_plugins.json"),
-        serde_json::to_string_pretty(&installed).unwrap(),
-    )
-    .expect("write installed_plugins.json");
-}
+use crate::helpers::{read_tpm_config, seed_tpm_plugin, write_fake_orchestrator};
 
 /// Create a harness with a git-initialized project and seeded TPM plugin.
 fn setup_tpm_tui_harness(name: &str) -> (TuiTestHarness, TempDir) {
@@ -85,14 +40,6 @@ fn setup_tpm_tui_harness(name: &str) -> (TuiTestHarness, TempDir) {
     write_fake_orchestrator(plugin_dir.path());
 
     (h, plugin_dir)
-}
-
-/// Read `.tpm/config.json` from the project directory inside the harness.
-fn read_tpm_config(h: &TuiTestHarness) -> serde_json::Value {
-    let path = h.project_path().join(".tpm/config.json");
-    let raw = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e));
-    serde_json::from_str(&raw).expect("invalid .tpm/config.json")
 }
 
 /// Determine how many Tabs from the Path field to reach the TPM Mode field.

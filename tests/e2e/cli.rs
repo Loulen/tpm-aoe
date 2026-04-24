@@ -3,20 +3,7 @@ use std::path::Path;
 use std::process::Command;
 
 use crate::harness::{require_tmux, TuiTestHarness};
-
-/// Helper to read a session field from the sessions.json in the harness's isolated home.
-fn read_sessions_json(h: &TuiTestHarness) -> serde_json::Value {
-    let sessions_path = if cfg!(target_os = "linux") {
-        h.home_path()
-            .join(".config/agent-of-empires/profiles/default/sessions.json")
-    } else {
-        h.home_path()
-            .join(".agent-of-empires/profiles/default/sessions.json")
-    };
-    let content = std::fs::read_to_string(&sessions_path)
-        .unwrap_or_else(|e| panic!("failed to read {}: {}", sessions_path.display(), e));
-    serde_json::from_str(&content).expect("invalid sessions JSON")
-}
+use crate::helpers::read_sessions;
 
 #[test]
 #[serial]
@@ -108,7 +95,7 @@ agent_extra_args = {{ claude = "--verbose --debug" }}
         String::from_utf8_lossy(&add_output.stderr)
     );
 
-    let sessions = read_sessions_json(&h);
+    let sessions = read_sessions(&h);
     let session = &sessions[0];
     assert_eq!(
         session["extra_args"].as_str().unwrap_or(""),
@@ -152,7 +139,7 @@ agent_command_override = {{ claude = "my-custom-claude" }}
         String::from_utf8_lossy(&add_output.stderr)
     );
 
-    let sessions = read_sessions_json(&h);
+    let sessions = read_sessions(&h);
     let session = &sessions[0];
     assert_eq!(
         session["command"].as_str().unwrap_or(""),
@@ -207,7 +194,7 @@ agent_command_override = {{ claude = "config-claude" }}
         String::from_utf8_lossy(&add_output.stderr)
     );
 
-    let sessions = read_sessions_json(&h);
+    let sessions = read_sessions(&h);
     let session = &sessions[0];
     assert_eq!(
         session["extra_args"].as_str().unwrap_or(""),
@@ -254,7 +241,7 @@ default_tool = "opencode"
         String::from_utf8_lossy(&add_output.stderr)
     );
 
-    let sessions = read_sessions_json(&h);
+    let sessions = read_sessions(&h);
     let session = &sessions[0];
     assert_eq!(
         session["tool"].as_str().unwrap_or(""),
@@ -308,7 +295,7 @@ default_tool = "opencode"
         String::from_utf8_lossy(&add_output.stderr)
     );
 
-    let sessions = read_sessions_json(&h);
+    let sessions = read_sessions(&h);
     let session = &sessions[0];
     assert_eq!(
         session["tool"].as_str().unwrap_or(""),
@@ -350,7 +337,7 @@ yolo_mode_default = true
         String::from_utf8_lossy(&add_output.stderr)
     );
 
-    let sessions = read_sessions_json(&h);
+    let sessions = read_sessions(&h);
     let session = &sessions[0];
     assert_eq!(
         session["yolo_mode"].as_bool(),
@@ -372,7 +359,7 @@ fn test_cli_add_yolo_flag_without_config() {
         String::from_utf8_lossy(&add_output.stderr)
     );
 
-    let sessions = read_sessions_json(&h);
+    let sessions = read_sessions(&h);
     let session = &sessions[0];
     assert_eq!(
         session["yolo_mode"].as_bool(),
@@ -394,7 +381,7 @@ fn test_cli_add_default_tool_no_config() {
         String::from_utf8_lossy(&add_output.stderr)
     );
 
-    let sessions = read_sessions_json(&h);
+    let sessions = read_sessions(&h);
     let session = &sessions[0];
     // Harness prepends a fake `claude` binary to PATH, so no-config tool
     // selection should deterministically choose `claude`.
@@ -421,7 +408,7 @@ fn test_cli_session_capture_stopped() {
         String::from_utf8_lossy(&add_output.stderr)
     );
 
-    let sessions = read_sessions_json(&h);
+    let sessions = read_sessions(&h);
     let session_id = sessions[0]["id"].as_str().expect("session should have id");
 
     // Capture a session that is not running -- should succeed with empty content
@@ -453,7 +440,7 @@ fn test_cli_session_capture_plain() {
         String::from_utf8_lossy(&add_output.stderr)
     );
 
-    let sessions = read_sessions_json(&h);
+    let sessions = read_sessions(&h);
     let session_id = sessions[0]["id"].as_str().expect("session should have id");
 
     // Plain text capture of stopped session -- empty output, no error
@@ -484,7 +471,7 @@ fn test_cli_rename_preserves_tmux_session() {
     );
 
     // 2. Read the session ID from storage
-    let sessions = read_sessions_json(&h);
+    let sessions = read_sessions(&h);
     let session_id = sessions[0]["id"].as_str().expect("session should have id");
     let truncated_id = &session_id[..8.min(session_id.len())];
 

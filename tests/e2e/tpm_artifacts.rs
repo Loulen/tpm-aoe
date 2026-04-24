@@ -9,63 +9,13 @@
 //! exercise it for both TPM and plain sessions.
 
 use serial_test::serial;
-use std::path::Path;
 use std::process::Command;
 use tempfile::TempDir;
 
 use crate::harness::TuiTestHarness;
-
-// ---------------------------------------------------------------------------
-// Helpers (duplicated per D-02 to avoid merge conflicts)
-// ---------------------------------------------------------------------------
-
-/// Read the persisted `sessions.json` from the harness's isolated profile dir.
-fn read_sessions(h: &TuiTestHarness) -> serde_json::Value {
-    let path = if cfg!(target_os = "linux") {
-        h.home_path()
-            .join(".config/agent-of-empires/profiles/default/sessions.json")
-    } else {
-        h.home_path()
-            .join(".agent-of-empires/profiles/default/sessions.json")
-    };
-    let raw = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e));
-    serde_json::from_str(&raw).expect("invalid sessions JSON")
-}
-
-/// Drop a fake `agents/orchestrator.md` under `root`.
-fn write_fake_orchestrator(root: &Path) -> std::path::PathBuf {
-    let agents = root.join("agents");
-    std::fs::create_dir_all(&agents).expect("create agents dir");
-    let file = agents.join("orchestrator.md");
-    std::fs::write(&file, "# Fake Orchestrator\n").expect("write orchestrator.md");
-    file
-}
-
-/// Return the history dir path for the harness's isolated home.
-fn history_dir(h: &TuiTestHarness) -> std::path::PathBuf {
-    if cfg!(target_os = "linux") {
-        h.home_path().join(".config/agent-of-empires/history")
-    } else {
-        h.home_path().join(".agent-of-empires/history")
-    }
-}
-
-/// List entries in a directory, returning an empty vec if the dir doesn't exist.
-fn list_dir_entries(dir: &Path) -> Vec<std::fs::DirEntry> {
-    match std::fs::read_dir(dir) {
-        Ok(entries) => entries.filter_map(|e| e.ok()).collect(),
-        Err(_) => Vec::new(),
-    }
-}
-
-/// Find a session by title in the sessions JSON array.
-fn find_session<'a>(sessions: &'a serde_json::Value, title: &str) -> &'a serde_json::Value {
-    sessions
-        .as_array()
-        .and_then(|arr| arr.iter().find(|s| s["title"] == title))
-        .unwrap_or_else(|| panic!("session {:?} not found in sessions.json", title))
-}
+use crate::helpers::{
+    find_session, history_dir, list_dir_entries, read_sessions, write_fake_orchestrator,
+};
 
 // ---------------------------------------------------------------------------
 // Tests

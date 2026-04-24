@@ -9,76 +9,9 @@
 //! Uses the same `TPM_WORKFLOW_PATH` env override as `tpm.rs` and `tpm_tier.rs`.
 
 use serial_test::serial;
-use std::path::Path;
-use std::process::Command;
-use tempfile::TempDir;
 
-use crate::harness::{require_tmux, TuiTestHarness};
-
-// ---------------------------------------------------------------------------
-// Helpers (self-contained to avoid cross-file merge conflicts)
-// ---------------------------------------------------------------------------
-
-/// Read the persisted `sessions.json` from the harness's isolated profile dir.
-fn read_sessions(h: &TuiTestHarness) -> serde_json::Value {
-    let path = if cfg!(target_os = "linux") {
-        h.home_path()
-            .join(".config/agent-of-empires/profiles/default/sessions.json")
-    } else {
-        h.home_path()
-            .join(".agent-of-empires/profiles/default/sessions.json")
-    };
-    let raw = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e));
-    serde_json::from_str(&raw).expect("invalid sessions JSON")
-}
-
-/// Drop a fake `agents/orchestrator.md` under `root`.
-fn write_fake_orchestrator(root: &Path) {
-    let agents = root.join("agents");
-    std::fs::create_dir_all(&agents).expect("create agents dir");
-    std::fs::write(agents.join("orchestrator.md"), "# Fake Orchestrator\n")
-        .expect("write orchestrator.md");
-}
-
-/// Create a harness with a git-initialized project and a fake plugin dir.
-fn setup_tpm_harness(name: &str) -> (TuiTestHarness, TempDir) {
-    let h = TuiTestHarness::new(name);
-    let project = h.project_path();
-
-    let git_init = Command::new("git")
-        .arg("init")
-        .arg("--quiet")
-        .arg(&project)
-        .output()
-        .expect("git init");
-    assert!(
-        git_init.status.success(),
-        "git init failed: {}",
-        String::from_utf8_lossy(&git_init.stderr)
-    );
-
-    let plugin_dir = TempDir::new().expect("plugin tempdir");
-    write_fake_orchestrator(plugin_dir.path());
-
-    (h, plugin_dir)
-}
-
-/// Find the session entry with the given title in sessions.json.
-fn find_session<'a>(sessions: &'a serde_json::Value, title: &str) -> &'a serde_json::Value {
-    sessions
-        .as_array()
-        .and_then(|arr| arr.iter().find(|s| s["title"] == title))
-        .unwrap_or_else(|| panic!("session with title {:?} not found in sessions.json", title))
-}
-
-/// Read `.tpm/config.json` from the project directory inside the harness.
-fn read_tpm_config(h: &TuiTestHarness) -> serde_json::Value {
-    let path = h.project_path().join(".tpm/config.json");
-    let raw = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e));
-    serde_json::from_str(&raw).expect("invalid .tpm/config.json")
-}
+use crate::harness::require_tmux;
+use crate::helpers::{find_session, read_sessions, read_tpm_config, setup_tpm_harness};
 
 // ---------------------------------------------------------------------------
 // AC-01: --tpm --tpm-review-passes 5 writes max_review_cycles: 5
@@ -87,7 +20,7 @@ fn read_tpm_config(h: &TuiTestHarness) -> serde_json::Value {
 #[test]
 #[serial]
 fn tpm_review_passes_five_writes_max_review_cycles() {
-    let (h, plugin_dir) = setup_tpm_harness("tpm_cfg_review5");
+    let (h, plugin_dir, _) = setup_tpm_harness("tpm_cfg_review5");
     let project = h.project_path();
 
     let output = h.run_cli_with_env(
@@ -125,7 +58,7 @@ fn tpm_review_passes_five_writes_max_review_cycles() {
 #[test]
 #[serial]
 fn tpm_disable_agents_writes_disabled_agents_list() {
-    let (h, plugin_dir) = setup_tpm_harness("tpm_cfg_disable2");
+    let (h, plugin_dir, _) = setup_tpm_harness("tpm_cfg_disable2");
     let project = h.project_path();
 
     let output = h.run_cli_with_env(
@@ -179,7 +112,7 @@ fn tpm_disable_agents_writes_disabled_agents_list() {
 #[test]
 #[serial]
 fn tpm_disable_implementer_is_silently_stripped() {
-    let (h, plugin_dir) = setup_tpm_harness("tpm_cfg_no_impl");
+    let (h, plugin_dir, _) = setup_tpm_harness("tpm_cfg_no_impl");
     let project = h.project_path();
 
     let output = h.run_cli_with_env(
@@ -226,7 +159,7 @@ fn tpm_disable_implementer_is_silently_stripped() {
 #[test]
 #[serial]
 fn tpm_review_passes_zero_omits_max_review_cycles() {
-    let (h, plugin_dir) = setup_tpm_harness("tpm_cfg_zero");
+    let (h, plugin_dir, _) = setup_tpm_harness("tpm_cfg_zero");
     let project = h.project_path();
 
     let output = h.run_cli_with_env(
@@ -263,7 +196,7 @@ fn tpm_review_passes_zero_omits_max_review_cycles() {
 #[test]
 #[serial]
 fn tpm_managed_flag_distinguishes_tpm_from_non_tpm_sessions() {
-    let (h, plugin_dir) = setup_tpm_harness("tpm_cfg_managed");
+    let (h, plugin_dir, _) = setup_tpm_harness("tpm_cfg_managed");
     let project = h.project_path();
 
     // Create TPM session
@@ -324,7 +257,7 @@ fn tpm_managed_flag_distinguishes_tpm_from_non_tpm_sessions() {
 fn tui_shows_tpm_badge_for_tpm_session_only() {
     require_tmux!();
 
-    let (mut h, plugin_dir) = setup_tpm_harness("tpm_cfg_badge");
+    let (mut h, plugin_dir, _) = setup_tpm_harness("tpm_cfg_badge");
     let project = h.project_path();
 
     // Create TPM session via CLI
@@ -400,7 +333,7 @@ fn tui_shows_tpm_badge_for_tpm_session_only() {
 #[test]
 #[serial]
 fn tpm_default_config_writes_standard_tier_minimal() {
-    let (h, plugin_dir) = setup_tpm_harness("tpm_cfg_default");
+    let (h, plugin_dir, _) = setup_tpm_harness("tpm_cfg_default");
     let project = h.project_path();
 
     let output = h.run_cli_with_env(
