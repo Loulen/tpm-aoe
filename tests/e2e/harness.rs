@@ -411,6 +411,12 @@ last_seen_version = "{}"
         self.home_dir.path()
     }
 
+    /// Path to the stub directory (first entry on PATH). Tests can overwrite
+    /// the `claude` script here to capture args received by the spawned session.
+    pub fn stub_path(&self) -> &Path {
+        &self.stub_path
+    }
+
     /// Create and return a test project directory inside the temp home.
     pub fn project_path(&self) -> PathBuf {
         let p = self.home_dir.path().join("test-project");
