@@ -340,6 +340,18 @@ pub async fn run(profile: &str, args: AddArgs) -> Result<()> {
         )?;
         instance.tpm_managed = true;
 
+        // Warn about unknown agent slugs (forward-compatible: don't error)
+        for slug in &args.tpm_disabled_agents {
+            if slug.as_str() != "implementer" && !crate::tpm::KNOWN_AGENTS.contains(&slug.as_str())
+            {
+                eprintln!(
+                    "warning: unknown TPM agent '{}'; known agents: {}",
+                    slug,
+                    crate::tpm::KNOWN_AGENTS.join(", ")
+                );
+            }
+        }
+
         let disabled: Vec<String> = args
             .tpm_disabled_agents
             .iter()

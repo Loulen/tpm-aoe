@@ -1362,7 +1362,7 @@ mod tests {
         assert!(
             result
                 .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ' ')),
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')),
             "sanitize_title produced unsafe characters: {:?}",
             result
         );
