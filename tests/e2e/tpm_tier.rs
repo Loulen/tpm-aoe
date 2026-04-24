@@ -135,6 +135,15 @@ fn aoe_add_tpm_default_tier_sets_tpm_managed_and_injects_prompt() {
         extra_args,
         orch_path.display()
     );
+
+    // .tpm/config.json: tier must be "standard" (the default when no tier is specified)
+    let config = read_tpm_config(&h);
+    assert_eq!(
+        config["tier"].as_str(),
+        Some("standard"),
+        "config.json tier should be 'standard' by default, got: {}",
+        config
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -334,5 +343,128 @@ fn preamble_constant_contains_no_single_quotes_or_backslashes() {
         !preamble.contains('\\'),
         "preamble must not contain backslashes for shell safety. got: {}",
         preamble
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Unknown agent slug validation (task-06 pre-existing finding)
+// ---------------------------------------------------------------------------
+
+/// AC-02: `--tpm-disable-agent nonexistent-agent` succeeds (exit 0) but stderr
+/// contains a warning about the unknown slug.
+#[test]
+#[serial]
+fn aoe_add_tpm_disable_unknown_agent_warns_on_stderr() {
+    let (h, plugin_dir, _orch_path) = setup_tpm_harness("tpm_unknown_agent_warn");
+    let project = h.project_path();
+
+    let output = h.run_cli_with_env(
+        &[
+            "add",
+            project.to_str().unwrap(),
+            "--tpm",
+            "--tpm-disable-agent",
+            "nonexistent-agent",
+            "-t",
+            "Unknown Agent Test",
+        ],
+        &[("TPM_WORKFLOW_PATH", plugin_dir.path())],
+    );
+    assert!(
+        output.status.success(),
+        "aoe add should succeed even with unknown agent slug.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("nonexistent-agent"),
+        "stderr should mention the unknown slug 'nonexistent-agent'. stderr: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("warning") || stderr.contains("unknown"),
+        "stderr should contain 'warning' or 'unknown'. stderr: {}",
+        stderr
+    );
+}
+
+/// AC-03: `--tpm-disable-agent blind-hunter` (a known agent) produces no
+/// warning on stderr.
+#[test]
+#[serial]
+fn aoe_add_tpm_disable_known_agent_no_warning() {
+    let (h, plugin_dir, _orch_path) = setup_tpm_harness("tpm_known_agent_ok");
+    let project = h.project_path();
+
+    let output = h.run_cli_with_env(
+        &[
+            "add",
+            project.to_str().unwrap(),
+            "--tpm",
+            "--tpm-disable-agent",
+            "blind-hunter",
+            "-t",
+            "Known Agent Test",
+        ],
+        &[("TPM_WORKFLOW_PATH", plugin_dir.path())],
+    );
+    assert!(
+        output.status.success(),
+        "aoe add should succeed with known agent slug.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("warning"),
+        "stderr should NOT contain a warning for known agent 'blind-hunter'. stderr: {}",
+        stderr
+    );
+}
+
+/// AC-04: `--tpm-disable-agent implementer` is silently stripped (existing
+/// behavior preserved). The implementer cannot be disabled.
+#[test]
+#[serial]
+fn aoe_add_tpm_disable_implementer_silently_stripped() {
+    let (h, plugin_dir, _orch_path) = setup_tpm_harness("tpm_implementer_strip");
+    let project = h.project_path();
+
+    let output = h.run_cli_with_env(
+        &[
+            "add",
+            project.to_str().unwrap(),
+            "--tpm",
+            "--tpm-disable-agent",
+            "implementer",
+            "-t",
+            "Implementer Strip Test",
+        ],
+        &[("TPM_WORKFLOW_PATH", plugin_dir.path())],
+    );
+    assert!(
+        output.status.success(),
+        "aoe add should succeed when disabling implementer.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("warning"),
+        "stderr should NOT contain a warning for 'implementer' (silently stripped). stderr: {}",
+        stderr
+    );
+
+    // Verify config.json has empty disabled_agents (implementer was stripped)
+    let config = read_tpm_config(&h);
+    let disabled = config["disabled_agents"].as_array();
+    assert!(
+        disabled.is_none() || disabled.unwrap().is_empty(),
+        "disabled_agents should be empty after stripping implementer. config: {}",
+        config
     );
 }
