@@ -10,94 +10,13 @@
 //! archive content rather than just existence.
 
 use serial_test::serial;
-use std::path::Path;
-use std::process::Command;
 use std::time::Duration;
-use tempfile::TempDir;
 
 use crate::harness::{require_tmux, TuiTestHarness};
-
-// ---------------------------------------------------------------------------
-// Helpers (duplicated per D-02 to avoid merge conflicts with tpm_artifacts.rs)
-// ---------------------------------------------------------------------------
-
-/// Return the history dir path for the harness's isolated home.
-fn history_dir(h: &TuiTestHarness) -> std::path::PathBuf {
-    if cfg!(target_os = "linux") {
-        h.home_path().join(".config/agent-of-empires/history")
-    } else {
-        h.home_path().join(".agent-of-empires/history")
-    }
-}
-
-/// List entries in a directory, returning an empty vec if the dir doesn't exist.
-fn list_dir_entries(dir: &Path) -> Vec<std::fs::DirEntry> {
-    match std::fs::read_dir(dir) {
-        Ok(entries) => entries.filter_map(|e| e.ok()).collect(),
-        Err(_) => Vec::new(),
-    }
-}
-
-/// Read the persisted `sessions.json` from the harness's isolated profile dir.
-fn read_sessions(h: &TuiTestHarness) -> serde_json::Value {
-    let path = if cfg!(target_os = "linux") {
-        h.home_path()
-            .join(".config/agent-of-empires/profiles/default/sessions.json")
-    } else {
-        h.home_path()
-            .join(".agent-of-empires/profiles/default/sessions.json")
-    };
-    let raw = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e));
-    serde_json::from_str(&raw).expect("invalid sessions JSON")
-}
-
-/// Drop a fake `agents/orchestrator.md` under `root`.
-fn write_fake_orchestrator(root: &Path) {
-    let agents = root.join("agents");
-    std::fs::create_dir_all(&agents).expect("create agents dir");
-    std::fs::write(agents.join("orchestrator.md"), "# Fake Orchestrator\n")
-        .expect("write orchestrator.md");
-}
-
-/// Find a session by title in the sessions JSON array.
-fn find_session<'a>(sessions: &'a serde_json::Value, title: &str) -> &'a serde_json::Value {
-    sessions
-        .as_array()
-        .and_then(|arr| arr.iter().find(|s| s["title"] == title))
-        .unwrap_or_else(|| panic!("session {:?} not found in sessions.json", title))
-}
-
-/// Seed `.tpm/` directory with STATE.md and SUMMARY.md for archival testing.
-fn seed_tpm_artifacts(project: &Path, state_content: &str, summary_content: &str) {
-    let tpm_dir = project.join(".tpm");
-    std::fs::create_dir_all(&tpm_dir).expect("create .tpm dir");
-    std::fs::write(tpm_dir.join("STATE.md"), state_content).expect("write STATE.md");
-    std::fs::write(tpm_dir.join("SUMMARY.md"), summary_content).expect("write SUMMARY.md");
-}
-
-/// Create a harness with a git-initialized project and a fake plugin dir.
-fn setup_tpm_harness(name: &str) -> (TuiTestHarness, TempDir) {
-    let h = TuiTestHarness::new(name);
-    let project = h.project_path();
-
-    let git_init = Command::new("git")
-        .arg("init")
-        .arg("--quiet")
-        .arg(&project)
-        .output()
-        .expect("git init");
-    assert!(
-        git_init.status.success(),
-        "git init failed: {}",
-        String::from_utf8_lossy(&git_init.stderr)
-    );
-
-    let plugin_dir = TempDir::new().expect("plugin tempdir");
-    write_fake_orchestrator(plugin_dir.path());
-
-    (h, plugin_dir)
-}
+use crate::helpers::{
+    find_session, history_dir, list_dir_entries, read_sessions, seed_tpm_artifacts,
+    setup_tpm_harness,
+};
 
 // ---------------------------------------------------------------------------
 // AC-01 (Journey 4): TUI deletion of TPM session archives artifacts
@@ -113,7 +32,7 @@ fn setup_tpm_harness(name: &str) -> (TuiTestHarness, TempDir) {
 fn tui_delete_tpm_session_archives_artifacts() {
     require_tmux!();
 
-    let (mut h, plugin_dir) = setup_tpm_harness("tpm_tui_del");
+    let (mut h, plugin_dir, _) = setup_tpm_harness("tpm_tui_del");
     let project = h.project_path();
 
     // Create TPM session via CLI
@@ -213,7 +132,7 @@ fn tui_delete_tpm_session_archives_artifacts() {
 #[test]
 #[serial]
 fn cli_remove_tpm_session_archives_with_valid_metadata() {
-    let (h, plugin_dir) = setup_tpm_harness("tpm_cli_del");
+    let (h, plugin_dir, _) = setup_tpm_harness("tpm_cli_del");
     let project = h.project_path();
 
     // Create TPM session via CLI

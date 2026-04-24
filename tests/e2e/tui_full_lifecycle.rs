@@ -15,50 +15,10 @@ use std::time::Duration;
 use tempfile::TempDir;
 
 use crate::harness::{require_tmux, TuiTestHarness};
-
-// ---------------------------------------------------------------------------
-// Helpers (self-contained per D-02 to avoid cross-file merge conflicts)
-// ---------------------------------------------------------------------------
-
-/// Drop a fake `agents/orchestrator.md` under `root`.
-fn write_fake_orchestrator(root: &Path) {
-    let agents = root.join("agents");
-    std::fs::create_dir_all(&agents).expect("create agents dir");
-    std::fs::write(agents.join("orchestrator.md"), "# Fake Orchestrator\n")
-        .expect("write orchestrator.md");
-}
-
-/// Seed `installed_plugins.json` + orchestrator cache in the harness temp HOME
-/// so `is_installed()` and `resolve_orchestrator()` succeed inside the TUI.
-fn seed_tpm_plugin(h: &TuiTestHarness) {
-    let home = h.home_path();
-
-    let plugins_dir = home.join(".claude").join("plugins");
-    std::fs::create_dir_all(&plugins_dir).expect("create plugins dir");
-
-    let cache_dir = plugins_dir
-        .join("cache")
-        .join("tpm-workflow")
-        .join("tpm-workflow")
-        .join("0.1.0");
-    std::fs::create_dir_all(&cache_dir).expect("create cache dir");
-    write_fake_orchestrator(&cache_dir);
-
-    let installed = serde_json::json!({
-        "schema_version": 2,
-        "plugins": {
-            "tpm-workflow@tpm-workflow": [{
-                "version": "0.1.0",
-                "path": cache_dir.to_string_lossy()
-            }]
-        }
-    });
-    std::fs::write(
-        plugins_dir.join("installed_plugins.json"),
-        serde_json::to_string_pretty(&installed).unwrap(),
-    )
-    .expect("write installed_plugins.json");
-}
+use crate::helpers::{
+    find_session, history_dir, list_dir_entries, read_sessions, seed_tpm_plugin,
+    write_fake_orchestrator,
+};
 
 /// Create a harness with a git-initialized project, seeded TPM plugin, and
 /// a fake plugin dir for CLI --tpm usage.
@@ -84,48 +44,6 @@ fn setup_lifecycle_harness(name: &str) -> (TuiTestHarness, TempDir) {
     write_fake_orchestrator(plugin_dir.path());
 
     (h, plugin_dir)
-}
-
-/// Return the history dir path for the harness's isolated home.
-fn history_dir(h: &TuiTestHarness) -> PathBuf {
-    if cfg!(target_os = "linux") {
-        h.home_path().join(".config/agent-of-empires/history")
-    } else {
-        h.home_path().join(".agent-of-empires/history")
-    }
-}
-
-/// List entries in a directory, returning an empty vec if the dir doesn't exist.
-fn list_dir_entries(dir: &Path) -> Vec<std::fs::DirEntry> {
-    match std::fs::read_dir(dir) {
-        Ok(entries) => entries.filter_map(|e| e.ok()).collect(),
-        Err(_) => Vec::new(),
-    }
-}
-
-/// Read the persisted `sessions.json` from the harness's isolated profile dir.
-fn read_sessions(h: &TuiTestHarness) -> serde_json::Value {
-    let path = if cfg!(target_os = "linux") {
-        h.home_path()
-            .join(".config/agent-of-empires/profiles/default/sessions.json")
-    } else {
-        h.home_path()
-            .join(".agent-of-empires/profiles/default/sessions.json")
-    };
-    let raw = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e));
-    serde_json::from_str(&raw).expect("invalid sessions JSON")
-}
-
-/// Find a session by title in the sessions JSON array.
-fn find_session_by_title<'a>(
-    sessions: &'a serde_json::Value,
-    title: &str,
-) -> &'a serde_json::Value {
-    sessions
-        .as_array()
-        .and_then(|arr| arr.iter().find(|s| s["title"] == title))
-        .unwrap_or_else(|| panic!("session {:?} not found in sessions.json", title))
 }
 
 /// Create a git repo at `path` with an initial commit on main. Returns the OID.
@@ -395,7 +313,7 @@ fn worktree_from_tui_shows_branch_name() {
 
     // Find the worktree path from sessions.json
     let sessions = read_sessions(&h);
-    let session = find_session_by_title(&sessions, "From Integration");
+    let session = find_session(&sessions, "From Integration");
     let wt_path = PathBuf::from(
         session["project_path"]
             .as_str()
@@ -531,7 +449,7 @@ fn worktree_default_matches_current_head() {
 
     // Find worktree path
     let sessions = read_sessions(&h);
-    let session = find_session_by_title(&sessions, "Default WT");
+    let session = find_session(&sessions, "Default WT");
     let wt_path = PathBuf::from(
         session["project_path"]
             .as_str()
@@ -700,7 +618,7 @@ fn send_keys_multiline_and_special_chars() {
 
     // Read the session ID from sessions.json
     let sessions = read_sessions(&h);
-    let session = find_session_by_title(&sessions, "Send Test");
+    let session = find_session(&sessions, "Send Test");
     let session_id = session["id"].as_str().expect("session has no id");
 
     // Compute the tmux session name that `aoe send` will look for

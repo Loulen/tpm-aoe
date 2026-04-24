@@ -25,6 +25,7 @@ use std::time::Duration;
 use tempfile::TempDir;
 
 use crate::harness::{require_tmux, TuiTestHarness};
+use crate::helpers::{read_tpm_config, write_fake_orchestrator};
 
 // ---------------------------------------------------------------------------
 // tmux environment guard
@@ -127,14 +128,6 @@ impl Drop for TmuxEnvGuard {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Drop a fake `agents/orchestrator.md` under `root`.
-fn write_fake_orchestrator(root: &Path) {
-    let agents = root.join("agents");
-    std::fs::create_dir_all(&agents).expect("create agents dir");
-    std::fs::write(agents.join("orchestrator.md"), "# Fake Orchestrator\n")
-        .expect("write orchestrator.md");
-}
-
 /// Create shell profile files in the fake home that prepend `stub_path` to
 /// PATH. This ensures the capturing claude stub is found when the tmux pane
 /// runs `bash -lc` (or `zsh -lc`).
@@ -206,14 +199,6 @@ exec bash -i
     write_shell_profiles(h.home_path(), h.stub_path());
 
     (h, plugin_dir)
-}
-
-/// Read `.tpm/config.json` from the project directory inside the harness.
-fn read_tpm_config(h: &TuiTestHarness) -> serde_json::Value {
-    let path = h.project_path().join(".tpm/config.json");
-    let raw = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e));
-    serde_json::from_str(&raw).expect("invalid .tpm/config.json")
 }
 
 /// Wait for the captured prompt file to appear, then read it.

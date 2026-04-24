@@ -9,6 +9,7 @@ use serial_test::serial;
 use std::path::PathBuf;
 
 use crate::harness::TuiTestHarness;
+use crate::helpers::read_sessions;
 
 // ---------------------------------------------------------------------------
 // Git repo setup helpers
@@ -114,20 +115,6 @@ fn head_oid(repo_path: &std::path::Path) -> git2::Oid {
     let head_ref = repo.head().expect("HEAD");
     let commit = head_ref.peel_to_commit().expect("commit");
     commit.id()
-}
-
-/// Read sessions.json from the harness's isolated home.
-fn read_sessions(h: &TuiTestHarness) -> serde_json::Value {
-    let path = if cfg!(target_os = "linux") {
-        h.home_path()
-            .join(".config/agent-of-empires/profiles/default/sessions.json")
-    } else {
-        h.home_path()
-            .join(".agent-of-empires/profiles/default/sessions.json")
-    };
-    let raw = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e));
-    serde_json::from_str(&raw).expect("invalid sessions JSON")
 }
 
 // ---------------------------------------------------------------------------
