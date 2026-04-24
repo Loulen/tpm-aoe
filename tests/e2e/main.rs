@@ -35,5 +35,6 @@ mod events;
 mod tpm_artifacts;
 mod tpm_tui_delete;
 mod tui_config_settings;
+mod tui_full_lifecycle;
 mod tui_state_panel;
 mod worktree_from;
