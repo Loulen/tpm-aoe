@@ -12,6 +12,31 @@ use std::time::Duration;
 
 use crate::harness::require_tmux;
 
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// RAII guard that kills the tmux session on drop, ensuring cleanup even if the
+/// test panics (M-01 fix).
+struct TmuxGuard {
+    name: String,
+}
+
+impl TmuxGuard {
+    fn new(name: &str) -> Self {
+        create_cat_session(name);
+        Self {
+            name: name.to_string(),
+        }
+    }
+}
+
+impl Drop for TmuxGuard {
+    fn drop(&mut self) {
+        kill_session(&self.name);
+    }
+}
+
 /// Create a detached tmux session running `cat` (echoes stdin to the pane).
 fn create_cat_session(name: &str) {
     let output = Command::new("tmux")
@@ -65,6 +90,10 @@ fn assert_temp_file_cleaned_up() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
 /// AC-01: User sends "hello world" to a tmux session running `cat`.
 /// `tmux capture-pane` output must contain "hello world".
 #[test]
@@ -73,7 +102,7 @@ fn test_send_keys_delivers_simple_text_to_cat_session() {
     require_tmux!();
 
     let session_name = format!("aoe_test_send_{}", std::process::id());
-    create_cat_session(&session_name);
+    let _guard = TmuxGuard::new(&session_name);
 
     let session = agent_of_empires::tmux::Session::from_name(&session_name);
     session
@@ -93,8 +122,6 @@ fn test_send_keys_delivers_simple_text_to_cat_session() {
 
     // AC-04: verify temp file cleanup
     assert_temp_file_cleaned_up();
-
-    kill_session(&session_name);
 }
 
 /// AC-02: User sends multi-line text "line1\nline2\nline3". Captured pane
@@ -105,7 +132,7 @@ fn test_send_keys_delivers_multiline_text_preserving_newlines() {
     require_tmux!();
 
     let session_name = format!("aoe_test_send_{}", std::process::id());
-    create_cat_session(&session_name);
+    let _guard = TmuxGuard::new(&session_name);
 
     let session = agent_of_empires::tmux::Session::from_name(&session_name);
     session
@@ -136,8 +163,6 @@ fn test_send_keys_delivers_multiline_text_preserving_newlines() {
 
     // AC-04: verify temp file cleanup
     assert_temp_file_cleaned_up();
-
-    kill_session(&session_name);
 }
 
 /// AC-03: User sends text with shell-special characters:
@@ -149,7 +174,7 @@ fn test_send_keys_preserves_shell_special_characters() {
     require_tmux!();
 
     let session_name = format!("aoe_test_send_{}", std::process::id());
-    create_cat_session(&session_name);
+    let _guard = TmuxGuard::new(&session_name);
 
     let special_text = r#"it's a "test" with $VAR and \backslash"#;
 
@@ -194,12 +219,10 @@ fn test_send_keys_preserves_shell_special_characters() {
 
     // AC-04: verify temp file cleanup
     assert_temp_file_cleaned_up();
-
-    kill_session(&session_name);
 }
 
 /// AC-04 (dedicated): After each send_keys call, no files matching
-/// `/tmp/aoe-send-*.txt` remain on disk. Sends multiple messages to
+/// `/tmp/aoe-send-<PID>.txt` remain on disk. Sends multiple messages to
 /// stress-test cleanup across repeated calls.
 #[test]
 #[serial]
@@ -207,7 +230,7 @@ fn test_send_keys_cleans_up_temp_files_after_each_call() {
     require_tmux!();
 
     let session_name = format!("aoe_test_send_{}", std::process::id());
-    create_cat_session(&session_name);
+    let _guard = TmuxGuard::new(&session_name);
 
     let session = agent_of_empires::tmux::Session::from_name(&session_name);
 
@@ -220,24 +243,16 @@ fn test_send_keys_cleans_up_temp_files_after_each_call() {
         assert_temp_file_cleaned_up();
     }
 
-    // Also scan /tmp for any stray aoe-send files from this process.
+    // Verify no stray temp files for THIS process remain (M-02 fix: scoped to
+    // current PID instead of globbing all aoe-send-*.txt which would catch files
+    // from other PIDs or parallel test runs).
+    let pid = std::process::id();
+    let expected_name = format!("aoe-send-{}.txt", pid);
     let tmp_dir = std::env::temp_dir();
-    if let Ok(entries) = std::fs::read_dir(&tmp_dir) {
-        let stray: Vec<String> = entries
-            .filter_map(Result::ok)
-            .filter(|e| {
-                let name = e.file_name().to_string_lossy().to_string();
-                name.starts_with("aoe-send-") && name.ends_with(".txt")
-            })
-            .map(|e| e.file_name().to_string_lossy().to_string())
-            .collect();
-        assert!(
-            stray.is_empty(),
-            "no aoe-send-*.txt files should remain in {}: {:?}",
-            tmp_dir.display(),
-            stray
-        );
-    }
-
-    kill_session(&session_name);
+    let pid_file = tmp_dir.join(&expected_name);
+    assert!(
+        !pid_file.exists(),
+        "temp file {} should not exist after all send_keys calls",
+        pid_file.display()
+    );
 }
