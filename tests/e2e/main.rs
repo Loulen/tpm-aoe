@@ -34,6 +34,7 @@ mod unified_view;
 
 mod events;
 mod tpm_artifacts;
+mod tpm_prompt_injection;
 mod tpm_tui_delete;
 mod tui_config_settings;
 mod tui_full_lifecycle;
