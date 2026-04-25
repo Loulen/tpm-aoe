@@ -228,10 +228,10 @@ impl HomeView {
     }
 
     fn render_list(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
-        let group_suffix = if self.group_by == GroupByMode::Project {
-            " (by project)"
-        } else {
-            ""
+        let group_suffix = match self.group_by {
+            GroupByMode::Project => " (by project)",
+            GroupByMode::Tpm => " (by TPM)",
+            _ => "",
         };
         let title = match self.view_mode {
             ViewMode::Agent => format!(

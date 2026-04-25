@@ -30,6 +30,7 @@ mod send_keys;
 mod tpm;
 mod tpm_artifacts;
 mod tpm_config;
+mod tpm_group_by;
 mod tpm_prompt_injection;
 mod tpm_tier;
 mod tpm_tui_create;

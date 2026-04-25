@@ -53,7 +53,7 @@ fn shortcuts() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
                 ("H/L", "Resize list panel"),
                 ("o", "Cycle sort forward"),
                 ("Ctrl+o", "Cycle sort backward"),
-                ("g", "Toggle group by project"),
+                ("g", "Cycle group mode"),
             ],
         ),
         (

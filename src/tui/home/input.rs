@@ -850,10 +850,10 @@ impl HomeView {
                         ));
                     }
                 } else if let Some(group_path) = &self.selected_group {
-                    if self.group_by == GroupByMode::Project {
+                    if matches!(self.group_by, GroupByMode::Project | GroupByMode::Tpm) {
                         self.info_dialog = Some(InfoDialog::new(
-                            "Cannot Modify Project Groups",
-                            "Project groups are automatic. Press 'g' to switch to manual grouping to manage groups.",
+                            "Cannot Modify Auto Groups",
+                            "These groups are automatic. Press 'g' to switch to manual grouping to manage groups.",
                         ));
                         return None;
                     }
@@ -907,10 +907,10 @@ impl HomeView {
                         ));
                     }
                 } else if let Some(group_path) = &self.selected_group {
-                    if self.group_by == GroupByMode::Project {
+                    if matches!(self.group_by, GroupByMode::Project | GroupByMode::Tpm) {
                         self.info_dialog = Some(InfoDialog::new(
-                            "Cannot Modify Project Groups",
-                            "Project groups are automatic. Press 'g' to switch to manual grouping to manage groups.",
+                            "Cannot Modify Auto Groups",
+                            "These groups are automatic. Press 'g' to switch to manual grouping to manage groups.",
                         ));
                         return None;
                     }
@@ -1120,7 +1120,7 @@ impl HomeView {
     }
 
     fn toggle_group_collapsed(&mut self, path: &str) {
-        if self.group_by == GroupByMode::Project {
+        if matches!(self.group_by, GroupByMode::Project | GroupByMode::Tpm) {
             let collapsed = self
                 .project_group_collapsed
                 .get(path)
