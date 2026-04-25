@@ -2718,3 +2718,75 @@ fn test_tpm_group_by_orphan_stays_ungrouped() {
         }
     }
 }
+
+/// E-01 regression: sessions with a pre-existing group_path from Manual mode
+/// must not leak that group into Tpm mode.
+#[test]
+#[serial]
+fn test_tpm_group_by_clears_preexisting_group_path() {
+    use crate::session::config::GroupByMode;
+    let temp = TempDir::new().unwrap();
+    setup_test_home(&temp);
+    let storage = Storage::new("test").unwrap();
+
+    let mut session = Instance::new("has-manual-group", "/tmp/g");
+    session.group_path = "my-manual-group".to_string();
+
+    let instances = vec![session];
+    storage.save(&instances).unwrap();
+
+    let tools = AvailableTools::with_tools(&["claude"]);
+    let mut view = HomeView::new(Some("test".to_string()), tools).unwrap();
+    view.group_by = GroupByMode::Tpm;
+    view.flat_items = view.build_flat_items();
+
+    let groups: Vec<_> = view
+        .flat_items
+        .iter()
+        .filter(|i| matches!(i, Item::Group { .. }))
+        .collect();
+    assert_eq!(
+        groups.len(),
+        0,
+        "manual group_path must not leak into Tpm mode"
+    );
+}
+
+/// E-02 regression: orchestrator titles containing `/` must not create
+/// nested group hierarchies.
+#[test]
+#[serial]
+fn test_tpm_group_by_slash_in_title_no_nested_groups() {
+    use crate::session::config::GroupByMode;
+    let temp = TempDir::new().unwrap();
+    setup_test_home(&temp);
+    let storage = Storage::new("test").unwrap();
+
+    let orchestrator = Instance::new("feature/auth-refactor", "/tmp/orch");
+    let orch_id = orchestrator.id.clone();
+
+    let mut child = Instance::new("child-task", "/tmp/c");
+    child.parent_session_id = Some(orch_id);
+
+    let instances = vec![orchestrator, child];
+    storage.save(&instances).unwrap();
+
+    let tools = AvailableTools::with_tools(&["claude"]);
+    let mut view = HomeView::new(Some("test".to_string()), tools).unwrap();
+    view.group_by = GroupByMode::Tpm;
+    view.flat_items = view.build_flat_items();
+
+    let groups: Vec<_> = view
+        .flat_items
+        .iter()
+        .filter_map(|i| match i {
+            Item::Group { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(groups.len(), 1, "should have exactly 1 group, not nested");
+    assert_eq!(
+        groups[0], "feature - auth-refactor",
+        "slash in title should be sanitized"
+    );
+}

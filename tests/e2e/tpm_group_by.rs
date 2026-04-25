@@ -2,8 +2,10 @@
 //!
 //! Seeds an orchestrator + 2 sub-sessions, presses `g` twice to reach Tpm mode,
 //! and verifies the group header is visible with the correct session count.
+//! Also tests expand/collapse behavior via arrow keys.
 
 use serial_test::serial;
+use std::time::Duration;
 
 use crate::harness::{require_tmux, TuiTestHarness};
 
@@ -55,7 +57,9 @@ fn seed_tpm_sessions(h: &TuiTestHarness) {
     std::fs::write(profile_dir.join("sessions.json"), sessions).expect("write sessions.json");
 }
 
-/// AC-05: press g twice to reach Tpm mode, verify group header visible with count.
+/// AC-05: press g twice to reach Tpm mode, verify group header visible with
+/// count and child sessions. Then test collapse (Left) hides children and
+/// expand (Right) restores them.
 #[test]
 #[serial]
 fn tpm_group_by_shows_orchestrator_group_with_count() {
@@ -70,15 +74,41 @@ fn tpm_group_by_shows_orchestrator_group_with_count() {
     // Default group mode for existing users (has_seen_welcome=true) is Manual.
     // Press g once -> Project, press g again -> Tpm.
     h.send_keys("g");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    std::thread::sleep(Duration::from_millis(500));
     h.send_keys("g");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    std::thread::sleep(Duration::from_millis(500));
 
     // In Tpm mode, the title bar should show "(by TPM)"
     h.wait_for("by TPM");
 
     // The group header should show the orchestrator's title and child count
     h.assert_screen_contains("TPM Orchestrator");
-    // The group header includes the count of children (2)
     h.assert_screen_contains("2");
+
+    // Children should be visible (group expanded by default)
+    h.assert_screen_contains("impl-auth");
+    h.assert_screen_contains("impl-db");
+
+    // Navigate cursor to the group header row. The orchestrator session is at
+    // index 0 (ungrouped, top), then group header at index 1. Press Down once.
+    h.send_keys("Down");
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Collapse the group (Left arrow)
+    h.send_keys("Left");
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Children should disappear
+    h.assert_screen_not_contains("impl-auth");
+    h.assert_screen_not_contains("impl-db");
+    // Group header should still be visible
+    h.assert_screen_contains("TPM Orchestrator");
+
+    // Expand the group (Right arrow)
+    h.send_keys("Right");
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Children should reappear
+    h.assert_screen_contains("impl-auth");
+    h.assert_screen_contains("impl-db");
 }

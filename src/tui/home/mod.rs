@@ -1051,16 +1051,17 @@ impl HomeView {
         let grouped: Vec<Instance> = base_instances
             .into_iter()
             .map(|mut inst| {
+                // Clear any pre-existing group_path from Manual mode so
+                // non-children don't leak into spurious group headers.
+                inst.group_path = String::new();
                 if let Some(parent_id) = &inst.parent_session_id {
                     if let Some(title) = parent_titles.get(parent_id) {
-                        // Child session: group under parent's title
-                        inst.group_path = title.clone();
+                        // Child session: group under parent's title.
+                        // Sanitize `/` so GroupTree doesn't create nested groups
+                        // for titles like "feature/auth-refactor".
+                        inst.group_path = title.replace('/', " - ");
                     }
-                    // Orphan (parent_session_id points to non-existent session):
-                    // leave group_path empty so it appears ungrouped at top level
                 }
-                // Sessions without parent_session_id (including orchestrators)
-                // keep group_path empty and appear at top level
                 inst
             })
             .collect();
