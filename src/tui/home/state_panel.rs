@@ -133,6 +133,22 @@ impl StatePanelCache {
     }
 }
 
+/// Pad a string to `target` display-width columns by appending spaces.
+/// If `s` is already >= `target` display columns, returns it unchanged.
+fn pad_to_display_width(s: &str, target: usize) -> String {
+    let current = UnicodeWidthStr::width(s);
+    if current >= target {
+        s.to_string()
+    } else {
+        let padding = target - current;
+        let mut result = s.to_string();
+        for _ in 0..padding {
+            result.push(' ');
+        }
+        result
+    }
+}
+
 /// Render the STATE.md panel into the given area.
 pub(in crate::tui) fn render_state_panel(
     frame: &mut Frame,
@@ -140,12 +156,18 @@ pub(in crate::tui) fn render_state_panel(
     content: &str,
     theme: &Theme,
     scroll_offset: usize,
+    fullscreen: bool,
 ) {
+    let title = if fullscreen {
+        " TPM State (full) "
+    } else {
+        " TPM State "
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(theme.accent))
-        .title(" TPM State ")
+        .title(title)
         .title_style(Style::default().fg(theme.accent).bold())
         .padding(Padding::horizontal(1));
 
@@ -320,7 +342,7 @@ fn compute_table_col_widths(table_lines: &[&str], max_width: usize) -> Vec<usize
             widths.resize(cells.len(), 0);
         }
         for (j, cell) in cells.iter().enumerate() {
-            widths[j] = widths[j].max(cell.len());
+            widths[j] = widths[j].max(UnicodeWidthStr::width(cell.as_str()));
         }
     }
 
@@ -345,8 +367,11 @@ fn render_table_header(cells: &[String], col_widths: &[usize], theme: &Theme) ->
     let mut spans: Vec<Span<'static>> = Vec::new();
 
     for (j, cell) in cells.iter().enumerate() {
-        let w = col_widths.get(j).copied().unwrap_or(cell.len());
-        let padded = format!("{:<width$}", cell, width = w);
+        let w = col_widths
+            .get(j)
+            .copied()
+            .unwrap_or_else(|| UnicodeWidthStr::width(cell.as_str()));
+        let padded = pad_to_display_width(cell, w);
 
         spans.push(Span::styled(
             padded,
@@ -369,8 +394,11 @@ fn render_table_row(cells: &[String], col_widths: &[usize], theme: &Theme) -> Li
     let mut spans: Vec<Span<'static>> = Vec::new();
 
     for (j, cell) in cells.iter().enumerate() {
-        let w = col_widths.get(j).copied().unwrap_or(cell.len());
-        let padded = format!("{:<width$}", cell, width = w);
+        let w = col_widths
+            .get(j)
+            .copied()
+            .unwrap_or_else(|| UnicodeWidthStr::width(cell.as_str()));
+        let padded = pad_to_display_width(cell, w);
 
         let style = status_color_for_cell(cell, theme);
         spans.push(Span::styled(padded, style));
@@ -688,5 +716,85 @@ mod tests {
         assert_eq!(byte_offset_for_width("\u{4f60}x", 2), 3);
         // Width larger than string returns full length
         assert_eq!(byte_offset_for_width("hi", 10), 2);
+    }
+
+    #[test]
+    fn test_compute_col_widths_emoji() {
+        // Table with emoji and varying display widths
+        let table = vec![
+            "| Status | Task |",
+            "|---|---|",
+            "| \u{2705} | task-01 |",
+            "| implementing | task-02 |",
+        ];
+        let widths = compute_table_col_widths(&table, 80);
+        // col 0: max(width("Status")=6, width("✅")=1, width("implementing")=12) = 12
+        // col 1: max(width("Task")=4, width("task-01")=7, width("task-02")=7) = 7
+        assert_eq!(widths, vec![12, 7]);
+    }
+
+    #[test]
+    fn test_pad_to_display_width() {
+        // ASCII padding
+        assert_eq!(pad_to_display_width("foo", 6), "foo   ");
+
+        // Emoji: ✅ has display width of 1 (per unicode_width)
+        let padded_emoji = pad_to_display_width("\u{2705}", 4);
+        assert_eq!(UnicodeWidthStr::width(padded_emoji.as_str()), 4);
+
+        // CJK: 日本 = 2 chars, each 2 columns = 4 display cols; pad to 6
+        let padded_cjk = pad_to_display_width("\u{65E5}\u{672C}", 6);
+        assert_eq!(UnicodeWidthStr::width(padded_cjk.as_str()), 6);
+
+        // Already at or beyond target: returned unchanged
+        assert_eq!(pad_to_display_width("hello", 3), "hello");
+        assert_eq!(pad_to_display_width("hello", 5), "hello");
+    }
+
+    #[test]
+    fn test_table_pipes_align() {
+        // Build a table with mixed ASCII/emoji content, render it, and
+        // verify that the │ separators appear at the same character offset
+        // in every row.
+        let content =
+            "| Status | Task |\n|---|---|\n| \u{2705} | task-01 |\n| implementing | task-02 |\n";
+        let theme = Theme::default();
+        let lines = parse_state_md(content, &theme, 80);
+        // Header + 2 data rows
+        assert_eq!(lines.len(), 3);
+
+        // Extract pipe (│ = U+2502) offsets from each rendered line
+        let mut all_offsets: Vec<Vec<usize>> = Vec::new();
+        for line in &lines {
+            let mut offsets = Vec::new();
+            let mut col = 0usize;
+            for span in &line.spans {
+                for ch in span.content.chars() {
+                    if ch == '\u{2502}' {
+                        offsets.push(col);
+                    }
+                    col += unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                }
+            }
+            all_offsets.push(offsets);
+        }
+
+        // All rows must have the same number of │ at the same offsets
+        assert!(
+            !all_offsets.is_empty(),
+            "should have at least one rendered row"
+        );
+        let expected = &all_offsets[0];
+        assert!(
+            !expected.is_empty(),
+            "header row should have at least one pipe separator"
+        );
+        for (i, offsets) in all_offsets.iter().enumerate() {
+            assert_eq!(
+                offsets, expected,
+                "Row {} pipe offsets {:?} differ from header {:?}",
+                i, offsets, expected
+            );
+        }
     }
 }

@@ -231,6 +231,7 @@ pub struct HomeView {
 
     // TPM STATE.md panel
     pub(super) show_state_panel: bool,
+    pub(super) state_panel_fullscreen: bool,
     pub(super) state_panel_cache: state_panel::StatePanelCache,
 }
 
@@ -367,6 +368,7 @@ impl HomeView {
                 .and_then(|c| c.app_state.home_list_width)
                 .unwrap_or(35),
             show_state_panel: false,
+            state_panel_fullscreen: false,
             state_panel_cache: state_panel::StatePanelCache::default(),
         };
 

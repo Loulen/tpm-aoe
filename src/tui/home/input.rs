@@ -734,9 +734,13 @@ impl HomeView {
                 self.state_panel_cache.scroll_offset =
                     self.state_panel_cache.scroll_offset.saturating_sub(3);
             }
+            KeyCode::Char('F') if self.show_state_panel => {
+                self.state_panel_fullscreen = !self.state_panel_fullscreen;
+            }
             KeyCode::Char('S') => {
                 if self.show_state_panel {
                     self.show_state_panel = false;
+                    self.state_panel_fullscreen = false;
                 } else if let Some(id) = self.selected_session.clone() {
                     if let Some(inst) = self.get_instance(&id).cloned() {
                         if super::state_panel::StatePanelCache::exists_for(&inst) {
@@ -1065,6 +1069,7 @@ impl HomeView {
                     self.selected_group_profile = None;
                     if changed {
                         self.show_state_panel = false;
+                        self.state_panel_fullscreen = false;
                         self.state_panel_cache.reset_scroll();
                     }
                 }
@@ -1073,6 +1078,7 @@ impl HomeView {
                     self.selected_group = Some(path.clone());
                     self.selected_group_profile = self.profile_for_cursor(self.cursor);
                     self.show_state_panel = false;
+                    self.state_panel_fullscreen = false;
                 }
             }
         }
