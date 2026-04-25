@@ -580,6 +580,12 @@ impl App {
 
         let attach_result = self.with_raw_mode_disabled(terminal, || tmux_session.attach())?;
 
+        // Mark the session as accessed so the idle indicator clears
+        self.home.mutate_instance(session_id, |inst| {
+            inst.last_accessed_at = Some(chrono::Utc::now());
+        });
+        let _ = self.home.save();
+
         self.needs_redraw = true;
         crate::tmux::refresh_session_cache();
         self.home.reload()?;

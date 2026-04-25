@@ -473,6 +473,17 @@ impl HomeView {
             style
         };
         line_spans.push(Span::styled(format!("{} ", icon), icon_style));
+
+        // Idle-attention dot: prepend a colored dot before the title for sessions
+        // that went idle after the user last viewed them.
+        if let Item::Session { id, .. } = item {
+            if let Some(inst) = self.get_instance(id) {
+                if inst.needs_attention() {
+                    line_spans.push(Span::styled("● ", Style::default().fg(theme.waiting)));
+                }
+            }
+        }
+
         line_spans.push(Span::styled(
             text.into_owned(),
             if is_selected { style.bold() } else { style },

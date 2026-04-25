@@ -499,10 +499,26 @@ impl HomeView {
                 if should_update {
                     let new_status = update.status;
                     let new_error = update.last_error;
+                    let mut idle_changed = false;
                     self.mutate_instance(&update.id, |inst| {
+                        let old = inst.status;
                         inst.status = new_status;
                         inst.last_error = new_error;
+
+                        // Track idle transitions for the "needs attention" indicator
+                        if old != Status::Idle && new_status == Status::Idle {
+                            inst.idle_since = Some(chrono::Utc::now());
+                            idle_changed = true;
+                        } else if old == Status::Idle && new_status != Status::Idle {
+                            inst.idle_since = None;
+                            idle_changed = true;
+                        }
                     });
+
+                    // Persist idle_since changes so they survive TUI restarts
+                    if idle_changed {
+                        let _ = self.save();
+                    }
 
                     if let Some(old) = old_status {
                         if old != new_status {
