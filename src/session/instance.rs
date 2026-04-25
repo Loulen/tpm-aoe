@@ -210,12 +210,13 @@ impl Instance {
     /// Compute the Claude Code project key for this session's `project_path`.
     ///
     /// Claude Code identifies projects by canonicalizing the path and replacing
-    /// each `/` with `-`. For example, `/home/user/my-project` becomes
-    /// `-home-user-my-project`. Returns `None` if the path cannot be canonicalized.
+    /// both `/` and `.` with `-`. For example, `/home/user/.config/my-project`
+    /// becomes `-home-user--config-my-project`. Returns `None` if the path
+    /// cannot be canonicalized.
     pub fn claude_project_hash(&self) -> Option<String> {
         std::fs::canonicalize(&self.project_path)
             .ok()
-            .map(|p| p.to_string_lossy().replace('/', "-"))
+            .map(|p| p.to_string_lossy().replace(['/', '.'], "-"))
     }
 
     /// Discover the most recent Claude Code session ID for this project.
@@ -1724,7 +1725,7 @@ mod tests {
         let canonical = std::fs::canonicalize("/tmp")
             .unwrap()
             .to_string_lossy()
-            .replace('/', "-");
+            .replace(['/', '.'], "-");
         assert_eq!(key, canonical);
     }
 
@@ -1737,12 +1738,35 @@ mod tests {
 
     #[test]
     fn test_claude_project_hash_format() {
-        // AC-01: the key starts with - (from leading /) and contains no /
+        // AC-01: the key starts with - (from leading /) and contains no / or .
         let inst = Instance::new("test", "/tmp");
         if let Some(key) = inst.claude_project_hash() {
             assert!(key.starts_with('-'), "key should start with -: {}", key);
             assert!(!key.contains('/'), "key should not contain /: {}", key);
+            assert!(!key.contains('.'), "key should not contain .: {}", key);
         }
+    }
+
+    #[test]
+    fn test_claude_project_hash_replaces_dots() {
+        // AC-01: dots in path components are replaced with -
+        let tmp = tempfile::tempdir().unwrap();
+        let dot_dir = tmp.path().join(".hidden-dir");
+        std::fs::create_dir_all(&dot_dir).unwrap();
+
+        let inst = Instance::new("test", dot_dir.to_str().unwrap());
+        let key = inst.claude_project_hash().unwrap();
+        assert!(
+            !key.contains('.'),
+            "dots should be replaced with -: {}",
+            key
+        );
+        // The dot from ".hidden-dir" should become "-hidden-dir"
+        assert!(
+            key.contains("-hidden-dir"),
+            "key should contain -hidden-dir: {}",
+            key
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1766,7 +1790,7 @@ mod tests {
         let project_key = std::fs::canonicalize(project_path)
             .unwrap()
             .to_string_lossy()
-            .replace('/', "-");
+            .replace(['/', '.'], "-");
         let claude_dir = tmp
             .path()
             .join(".claude-test-home")
