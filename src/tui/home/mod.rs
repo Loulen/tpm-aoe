@@ -56,6 +56,19 @@ fn project_group_name(inst: &Instance) -> String {
         })
 }
 
+/// Update `idle_since` when a session's status transitions to or from Idle.
+/// Must be called BEFORE overwriting `inst.status` with `new_status`.
+fn apply_idle_transition(inst: &mut Instance, new_status: crate::session::Status) {
+    use crate::session::Status;
+
+    let old = inst.status;
+    if old != Status::Idle && new_status == Status::Idle {
+        inst.idle_since = Some(chrono::Utc::now());
+    } else if old == Status::Idle && new_status != Status::Idle {
+        inst.idle_since = None;
+    }
+}
+
 pub(super) struct GroupRenameContext {
     pub(super) old_path: String,
     pub(super) old_profile: String,
@@ -231,6 +244,7 @@ pub struct HomeView {
 
     // TPM STATE.md panel
     pub(super) show_state_panel: bool,
+    pub(super) state_panel_fullscreen: bool,
     pub(super) state_panel_cache: state_panel::StatePanelCache,
 }
 
@@ -367,6 +381,7 @@ impl HomeView {
                 .and_then(|c| c.app_state.home_list_width)
                 .unwrap_or(35),
             show_state_panel: false,
+            state_panel_fullscreen: false,
             state_panel_cache: state_panel::StatePanelCache::default(),
         };
 
@@ -415,6 +430,10 @@ impl HomeView {
                     inst.last_error = prev.last_error.clone();
                     inst.last_error_check = prev.last_error_check;
                     inst.last_start_time = prev.last_start_time;
+                    // Preserve idle tracking fields so a failed save()
+                    // doesn't let reload() overwrite them with stale disk values
+                    inst.last_accessed_at = prev.last_accessed_at;
+                    inst.idle_since = prev.idle_since;
                 }
             }
             // Rebuild this profile's tree from disk, preserving any collapsed
@@ -498,6 +517,7 @@ impl HomeView {
                     let new_status = update.status;
                     let new_error = update.last_error;
                     self.mutate_instance(&update.id, |inst| {
+                        apply_idle_transition(inst, new_status);
                         inst.status = new_status;
                         inst.last_error = new_error;
                     });
@@ -956,6 +976,9 @@ impl HomeView {
         if self.group_by == GroupByMode::Project {
             return self.build_flat_items_by_project();
         }
+        if self.group_by == GroupByMode::Tpm {
+            return self.build_flat_items_by_tpm();
+        }
 
         if let Some(profile) = &self.active_profile {
             let filtered: Vec<Instance> = self
@@ -995,6 +1018,52 @@ impl HomeView {
             .into_iter()
             .map(|mut inst| {
                 inst.group_path = project_group_name(&inst);
+                inst
+            })
+            .collect();
+
+        let mut tree = GroupTree::new_with_groups(&grouped, &[]);
+        for (path, &collapsed) in &self.project_group_collapsed {
+            if collapsed {
+                tree.set_collapsed(path, true);
+            }
+        }
+        flatten_tree(&tree, &grouped, self.sort_order)
+    }
+
+    fn build_flat_items_by_tpm(&self) -> Vec<Item> {
+        let base_instances: Vec<Instance> = if let Some(profile) = &self.active_profile {
+            self.instances
+                .iter()
+                .filter(|i| i.source_profile == *profile)
+                .cloned()
+                .collect()
+        } else {
+            self.instances.clone()
+        };
+
+        // Build a lookup: parent_id -> parent title for resolving group names
+        let parent_titles: HashMap<String, String> = base_instances
+            .iter()
+            .map(|i| (i.id.clone(), i.title.clone()))
+            .collect();
+
+        let grouped: Vec<Instance> = base_instances
+            .into_iter()
+            .map(|mut inst| {
+                // Clear any pre-existing group_path from Manual mode so
+                // non-children don't leak into spurious group headers.
+                inst.group_path = String::new();
+                if let Some(parent_id) = &inst.parent_session_id {
+                    if parent_id != &inst.id {
+                        if let Some(title) = parent_titles.get(parent_id) {
+                            // Child session: group under parent's title.
+                            // Sanitize `/` so GroupTree doesn't create nested groups
+                            // for titles like "feature/auth-refactor".
+                            inst.group_path = title.replace('/', " - ");
+                        }
+                    }
+                }
                 inst
             })
             .collect();
@@ -1078,7 +1147,10 @@ impl HomeView {
     }
 
     pub fn set_instance_status(&mut self, id: &str, status: crate::session::Status) {
-        self.mutate_instance(id, |inst| inst.status = status);
+        self.mutate_instance(id, |inst| {
+            apply_idle_transition(inst, status);
+            inst.status = status;
+        });
     }
 
     pub fn save(&self) -> anyhow::Result<()> {

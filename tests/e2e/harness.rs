@@ -417,6 +417,12 @@ last_seen_version = "{}"
         &self.stub_path
     }
 
+    /// Path to the tmux socket used by this harness. Useful for creating
+    /// auxiliary tmux sessions on the same server that AoE will check.
+    pub fn socket_path(&self) -> &Path {
+        &self.socket_path
+    }
+
     /// Create and return a test project directory inside the temp home.
     pub fn project_path(&self) -> PathBuf {
         let p = self.home_dir.path().join("test-project");

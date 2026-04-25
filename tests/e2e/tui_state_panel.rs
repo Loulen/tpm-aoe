@@ -150,3 +150,106 @@ fn state_panel_cjk_unicode_content_renders() {
     h.wait_for_timeout("\u{72B6}\u{614B}", Duration::from_secs(5));
     h.assert_screen_contains("\u{65E5}\u{672C}\u{8A9E}\u{30C6}\u{30B9}\u{30C8}");
 }
+
+// ===========================================================================
+// AC-07: Fullscreen toggle and preview hiding
+// ===========================================================================
+
+#[test]
+#[serial]
+fn state_panel_fullscreen_toggle_hides_preview() {
+    require_tmux!();
+
+    let mut h = TuiTestHarness::new("state_panel_fs");
+
+    let project = h.project_path();
+    let tpm_dir = project.join(".tpm");
+    std::fs::create_dir_all(&tpm_dir).expect("create .tpm dir");
+    std::fs::write(
+        tpm_dir.join("STATE.md"),
+        "## Tasks\n\n| Task | Status |\n|---|---|\n| task-01 | done |\n| task-02 | implementing |\n",
+    )
+    .expect("write STATE.md");
+
+    seed_session(&h, "FS Toggle", &project);
+
+    h.spawn_tui();
+    h.wait_for("Agent of Empires");
+    h.wait_for("FS Toggle");
+
+    // Open state panel in split mode
+    h.send_keys("S");
+    std::thread::sleep(Duration::from_millis(800));
+    h.wait_for_timeout("task-01", Duration::from_secs(5));
+    // Preview title should be visible in split mode
+    h.assert_screen_contains("Preview");
+
+    // Press Shift+F to go fullscreen
+    h.send_keys("F");
+    std::thread::sleep(Duration::from_millis(500));
+
+    // (a) State panel content still visible
+    h.assert_screen_contains("task-01");
+    // (b) Preview title should be gone (fullscreen hides preview)
+    h.assert_screen_not_contains("Preview");
+
+    // Press Shift+F again to restore split mode
+    h.send_keys("F");
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Preview reappears alongside state panel content
+    h.assert_screen_contains("Preview");
+    h.assert_screen_contains("task-01");
+}
+
+// ===========================================================================
+// AC-08: Fullscreen reset on close
+// ===========================================================================
+
+#[test]
+#[serial]
+fn state_panel_fullscreen_resets_on_close() {
+    require_tmux!();
+
+    let mut h = TuiTestHarness::new("state_panel_fs_reset");
+
+    let project = h.project_path();
+    let tpm_dir = project.join(".tpm");
+    std::fs::create_dir_all(&tpm_dir).expect("create .tpm dir");
+    std::fs::write(
+        tpm_dir.join("STATE.md"),
+        "## Wave 1\n\n| Task | Status |\n|---|---|\n| task-01 | done |\n",
+    )
+    .expect("write STATE.md");
+
+    seed_session(&h, "FS Reset", &project);
+
+    h.spawn_tui();
+    h.wait_for("Agent of Empires");
+    h.wait_for("FS Reset");
+
+    // Open panel, go fullscreen
+    h.send_keys("S");
+    std::thread::sleep(Duration::from_millis(800));
+    h.wait_for_timeout("task-01", Duration::from_secs(5));
+    h.send_keys("F");
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Verify fullscreen (no Preview)
+    h.assert_screen_not_contains("Preview");
+
+    // Close with S
+    h.send_keys("S");
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Panel content should be hidden
+    h.wait_for_absent("TPM State", Duration::from_secs(5));
+
+    // Re-open with S: should be in split mode (not fullscreen)
+    h.send_keys("S");
+    std::thread::sleep(Duration::from_millis(800));
+    h.wait_for_timeout("task-01", Duration::from_secs(5));
+
+    // Preview should be visible (split mode, not fullscreen)
+    h.assert_screen_contains("Preview");
+}

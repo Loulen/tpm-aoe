@@ -115,20 +115,36 @@ impl HomeView {
                 }
             }
 
-            let right_chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-                .split(chunks[1]);
-
-            self.render_preview(frame, right_chunks[0], theme);
             let scroll = self.state_panel_cache.scroll_offset;
-            super::state_panel::render_state_panel(
-                frame,
-                right_chunks[1],
-                &self.state_panel_cache.content,
-                theme,
-                scroll,
-            );
+            let fullscreen = self.state_panel_fullscreen;
+
+            if fullscreen {
+                // Fullscreen: state panel takes the entire right area
+                super::state_panel::render_state_panel(
+                    frame,
+                    chunks[1],
+                    &self.state_panel_cache.content,
+                    theme,
+                    scroll,
+                    true,
+                );
+            } else {
+                // Split mode: preview + state panel side by side
+                let right_chunks = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+                    .split(chunks[1]);
+
+                self.render_preview(frame, right_chunks[0], theme);
+                super::state_panel::render_state_panel(
+                    frame,
+                    right_chunks[1],
+                    &self.state_panel_cache.content,
+                    theme,
+                    scroll,
+                    false,
+                );
+            }
         } else {
             // Refresh cache in background even when panel is hidden (for poll)
             if self.show_state_panel {
@@ -212,10 +228,10 @@ impl HomeView {
     }
 
     fn render_list(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
-        let group_suffix = if self.group_by == GroupByMode::Project {
-            " (by project)"
-        } else {
-            ""
+        let group_suffix = match self.group_by {
+            GroupByMode::Project => " (by project)",
+            GroupByMode::Tpm => " (by TPM)",
+            _ => "",
         };
         let title = match self.view_mode {
             ViewMode::Agent => format!(
@@ -457,6 +473,17 @@ impl HomeView {
             style
         };
         line_spans.push(Span::styled(format!("{} ", icon), icon_style));
+
+        // Idle-attention dot: prepend a colored dot before the title for sessions
+        // that went idle after the user last viewed them.
+        if let Item::Session { id, .. } = item {
+            if let Some(inst) = self.get_instance(id) {
+                if inst.needs_attention() {
+                    line_spans.push(Span::styled("● ", Style::default().fg(theme.waiting)));
+                }
+            }
+        }
+
         line_spans.push(Span::styled(
             text.into_owned(),
             if is_selected { style.bold() } else { style },
@@ -903,10 +930,18 @@ impl HomeView {
         // Show S: State hint when a TPM session is selected (uses cached path, no fs stat)
         if self.selected_session.is_some() && self.state_panel_cache.has_state_file() {
             if self.show_state_panel {
+                let fullscreen_hint = if self.state_panel_fullscreen {
+                    " Split "
+                } else {
+                    " Full "
+                };
                 spans.extend([
                     Span::styled("│", sep_style),
                     Span::styled(" S", key_style),
                     Span::styled(" Close ", desc_style),
+                    Span::styled("│", sep_style),
+                    Span::styled(" F", key_style),
+                    Span::styled(fullscreen_hint, desc_style),
                     Span::styled("│", sep_style),
                     Span::styled(" J/K", key_style),
                     Span::styled(" Scroll ", desc_style),
