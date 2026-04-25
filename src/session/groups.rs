@@ -1150,4 +1150,50 @@ mod tests {
 
         assert!(tree.group_exists("work"));
     }
+
+    #[test]
+    fn test_flatten_with_tpm_style_group_names() {
+        // Simulates what build_flat_items_by_tpm() does: child sessions get
+        // group_path set to the parent session's title, while the orchestrator
+        // session stays ungrouped (empty group_path).
+        let orchestrator = Instance::new("my-orchestrator", "/tmp/orch");
+        let mut child1 = Instance::new("child-1", "/tmp/c1");
+        child1.group_path = "my-orchestrator".to_string();
+        let mut child2 = Instance::new("child-2", "/tmp/c2");
+        child2.group_path = "my-orchestrator".to_string();
+
+        let instances = vec![orchestrator, child1, child2];
+        let tree = GroupTree::new_with_groups(&instances, &[]);
+        let items = flatten_tree(&tree, &instances, SortOrder::Oldest);
+
+        // Expect: 1 ungrouped session (orchestrator) + 1 group header + 2 children
+        let groups: Vec<_> = items
+            .iter()
+            .filter(|i| matches!(i, Item::Group { .. }))
+            .collect();
+        assert_eq!(groups.len(), 1, "should have exactly 1 group");
+
+        if let Item::Group {
+            name,
+            session_count,
+            ..
+        } = &groups[0]
+        {
+            assert_eq!(name, "my-orchestrator");
+            assert_eq!(*session_count, 2, "group should count 2 direct children");
+        }
+
+        let sessions: Vec<_> = items
+            .iter()
+            .filter(|i| matches!(i, Item::Session { .. }))
+            .collect();
+        assert_eq!(sessions.len(), 3, "should have 3 sessions total");
+
+        // First item is the ungrouped orchestrator at depth 0
+        if let Item::Session { depth, .. } = &items[0] {
+            assert_eq!(*depth, 0, "orchestrator should be at depth 0");
+        } else {
+            panic!("first item should be a session (orchestrator)");
+        }
+    }
 }

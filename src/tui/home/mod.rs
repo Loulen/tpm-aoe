@@ -976,6 +976,9 @@ impl HomeView {
         if self.group_by == GroupByMode::Project {
             return self.build_flat_items_by_project();
         }
+        if self.group_by == GroupByMode::Tpm {
+            return self.build_flat_items_by_tpm();
+        }
 
         if let Some(profile) = &self.active_profile {
             let filtered: Vec<Instance> = self
@@ -1015,6 +1018,52 @@ impl HomeView {
             .into_iter()
             .map(|mut inst| {
                 inst.group_path = project_group_name(&inst);
+                inst
+            })
+            .collect();
+
+        let mut tree = GroupTree::new_with_groups(&grouped, &[]);
+        for (path, &collapsed) in &self.project_group_collapsed {
+            if collapsed {
+                tree.set_collapsed(path, true);
+            }
+        }
+        flatten_tree(&tree, &grouped, self.sort_order)
+    }
+
+    fn build_flat_items_by_tpm(&self) -> Vec<Item> {
+        let base_instances: Vec<Instance> = if let Some(profile) = &self.active_profile {
+            self.instances
+                .iter()
+                .filter(|i| i.source_profile == *profile)
+                .cloned()
+                .collect()
+        } else {
+            self.instances.clone()
+        };
+
+        // Build a lookup: parent_id -> parent title for resolving group names
+        let parent_titles: HashMap<String, String> = base_instances
+            .iter()
+            .map(|i| (i.id.clone(), i.title.clone()))
+            .collect();
+
+        let grouped: Vec<Instance> = base_instances
+            .into_iter()
+            .map(|mut inst| {
+                // Clear any pre-existing group_path from Manual mode so
+                // non-children don't leak into spurious group headers.
+                inst.group_path = String::new();
+                if let Some(parent_id) = &inst.parent_session_id {
+                    if parent_id != &inst.id {
+                        if let Some(title) = parent_titles.get(parent_id) {
+                            // Child session: group under parent's title.
+                            // Sanitize `/` so GroupTree doesn't create nested groups
+                            // for titles like "feature/auth-refactor".
+                            inst.group_path = title.replace('/', " - ");
+                        }
+                    }
+                }
                 inst
             })
             .collect();

@@ -121,13 +121,15 @@ pub enum GroupByMode {
     #[default]
     Manual,
     Project,
+    Tpm,
 }
 
 impl GroupByMode {
     pub fn cycle(self) -> Self {
         match self {
             GroupByMode::Manual => GroupByMode::Project,
-            GroupByMode::Project => GroupByMode::Manual,
+            GroupByMode::Project => GroupByMode::Tpm,
+            GroupByMode::Tpm => GroupByMode::Manual,
         }
     }
 
@@ -135,6 +137,7 @@ impl GroupByMode {
         match self {
             GroupByMode::Manual => "Manual",
             GroupByMode::Project => "Project",
+            GroupByMode::Tpm => "TPM",
         }
     }
 }
@@ -1175,5 +1178,48 @@ mod tests {
             deserialized.session.agent_detect_as.get("lenovo-claude"),
             Some(&"claude".to_string()),
         );
+    }
+
+    #[test]
+    fn test_group_by_mode_tpm_serialization_roundtrip() {
+        // AC-01: Tpm variant serializes as "tpm" and deserializes back
+        let mode = GroupByMode::Tpm;
+        let json = serde_json::to_string(&mode).unwrap();
+        assert_eq!(json, r#""tpm""#);
+        let deserialized: GroupByMode = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, GroupByMode::Tpm);
+    }
+
+    #[test]
+    fn test_group_by_mode_cycle_three_way() {
+        // AC-01: cycle goes Manual -> Project -> Tpm -> Manual
+        assert_eq!(GroupByMode::Manual.cycle(), GroupByMode::Project);
+        assert_eq!(GroupByMode::Project.cycle(), GroupByMode::Tpm);
+        assert_eq!(GroupByMode::Tpm.cycle(), GroupByMode::Manual);
+    }
+
+    #[test]
+    fn test_group_by_mode_tpm_label() {
+        assert_eq!(GroupByMode::Tpm.label(), "TPM");
+    }
+
+    #[test]
+    fn test_group_by_mode_backwards_compat_deserialization() {
+        // AC-02: existing "manual" and "project" values still deserialize
+        let manual: GroupByMode = serde_json::from_str(r#""manual""#).unwrap();
+        assert_eq!(manual, GroupByMode::Manual);
+        let project: GroupByMode = serde_json::from_str(r#""project""#).unwrap();
+        assert_eq!(project, GroupByMode::Project);
+    }
+
+    #[test]
+    fn test_group_by_mode_tpm_in_app_state_toml() {
+        // Tpm variant persists correctly in TOML config
+        let toml_str = r#"
+            [app_state]
+            group_by = "tpm"
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.app_state.group_by, Some(GroupByMode::Tpm));
     }
 }

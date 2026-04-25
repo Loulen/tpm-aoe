@@ -323,6 +323,8 @@ fn test_g_key_cycles_group_by() {
     env.view.handle_key(key(KeyCode::Char('g')));
     assert_eq!(env.view.group_by, GroupByMode::Project);
     env.view.handle_key(key(KeyCode::Char('g')));
+    assert_eq!(env.view.group_by, GroupByMode::Tpm);
+    env.view.handle_key(key(KeyCode::Char('g')));
     assert_eq!(env.view.group_by, GroupByMode::Manual);
 }
 
@@ -2595,4 +2597,234 @@ fn test_state_panel_fullscreen_resets_on_session_switch() {
         !env.view.state_panel_fullscreen,
         "state_panel_fullscreen should reset when switching sessions"
     );
+}
+
+// --- TPM group-by mode tests ---
+
+fn create_test_env_with_tpm_sessions() -> TestEnv {
+    use crate::session::config::GroupByMode;
+    let temp = TempDir::new().unwrap();
+    setup_test_home(&temp);
+    let storage = Storage::new("test").unwrap();
+
+    // Create orchestrator (no parent_session_id)
+    let orchestrator = Instance::new("my-orchestrator", "/tmp/orch");
+    let orch_id = orchestrator.id.clone();
+
+    // Create 3 child sessions pointing to the orchestrator
+    let mut child1 = Instance::new("impl-auth", "/tmp/c1");
+    child1.parent_session_id = Some(orch_id.clone());
+    let mut child2 = Instance::new("impl-db", "/tmp/c2");
+    child2.parent_session_id = Some(orch_id.clone());
+    let mut child3 = Instance::new("impl-ui", "/tmp/c3");
+    child3.parent_session_id = Some(orch_id);
+
+    let instances = vec![orchestrator, child1, child2, child3];
+    storage.save(&instances).unwrap();
+
+    let tools = AvailableTools::with_tools(&["claude"]);
+    let mut view = HomeView::new(Some("test".to_string()), tools).unwrap();
+    view.group_by = GroupByMode::Tpm;
+    view.flat_items = view.build_flat_items();
+    view.update_selected();
+    TestEnv { _temp: temp, view }
+}
+
+/// AC-03: build_flat_items_by_tpm() produces correct grouping
+/// (1 group + 3 children + orchestrator ungrouped)
+#[test]
+#[serial]
+fn test_tpm_group_by_produces_correct_grouping() {
+    let env = create_test_env_with_tpm_sessions();
+
+    let groups: Vec<_> = env
+        .view
+        .flat_items
+        .iter()
+        .filter(|i| matches!(i, Item::Group { .. }))
+        .collect();
+    assert_eq!(groups.len(), 1, "should have exactly 1 group header");
+
+    if let Item::Group {
+        name,
+        session_count,
+        ..
+    } = &groups[0]
+    {
+        assert_eq!(name, "my-orchestrator", "group name should be parent title");
+        assert_eq!(*session_count, 3, "group should count 3 direct children");
+    }
+
+    let sessions: Vec<_> = env
+        .view
+        .flat_items
+        .iter()
+        .filter(|i| matches!(i, Item::Session { .. }))
+        .collect();
+    assert_eq!(sessions.len(), 4, "should have 4 sessions total");
+
+    // First item is the ungrouped orchestrator at depth 0
+    if let Item::Session { depth, .. } = &env.view.flat_items[0] {
+        assert_eq!(*depth, 0, "orchestrator should be at depth 0");
+    } else {
+        panic!("first item should be a session (orchestrator)");
+    }
+}
+
+/// AC-04: orphaned sub-sessions (parent_session_id pointing to nonexistent ID)
+/// stay ungrouped at top level.
+#[test]
+#[serial]
+fn test_tpm_group_by_orphan_stays_ungrouped() {
+    use crate::session::config::GroupByMode;
+    let temp = TempDir::new().unwrap();
+    setup_test_home(&temp);
+    let storage = Storage::new("test").unwrap();
+
+    let standalone = Instance::new("standalone", "/tmp/s");
+    let mut orphan = Instance::new("orphan-session", "/tmp/o");
+    orphan.parent_session_id = Some("nonexistent-id-12345".to_string());
+
+    let instances = vec![standalone, orphan];
+    storage.save(&instances).unwrap();
+
+    let tools = AvailableTools::with_tools(&["claude"]);
+    let mut view = HomeView::new(Some("test".to_string()), tools).unwrap();
+    view.group_by = GroupByMode::Tpm;
+    view.flat_items = view.build_flat_items();
+
+    let groups: Vec<_> = view
+        .flat_items
+        .iter()
+        .filter(|i| matches!(i, Item::Group { .. }))
+        .collect();
+    assert_eq!(
+        groups.len(),
+        0,
+        "no groups should exist for orphan sessions"
+    );
+
+    let sessions: Vec<_> = view
+        .flat_items
+        .iter()
+        .filter(|i| matches!(i, Item::Session { .. }))
+        .collect();
+    assert_eq!(sessions.len(), 2, "both sessions should appear ungrouped");
+
+    // Both at depth 0
+    for item in &view.flat_items {
+        if let Item::Session { depth, .. } = item {
+            assert_eq!(*depth, 0, "orphan and standalone should both be at depth 0");
+        }
+    }
+}
+
+/// E-01 regression: sessions with a pre-existing group_path from Manual mode
+/// must not leak that group into Tpm mode.
+#[test]
+#[serial]
+fn test_tpm_group_by_clears_preexisting_group_path() {
+    use crate::session::config::GroupByMode;
+    let temp = TempDir::new().unwrap();
+    setup_test_home(&temp);
+    let storage = Storage::new("test").unwrap();
+
+    let mut session = Instance::new("has-manual-group", "/tmp/g");
+    session.group_path = "my-manual-group".to_string();
+
+    let instances = vec![session];
+    storage.save(&instances).unwrap();
+
+    let tools = AvailableTools::with_tools(&["claude"]);
+    let mut view = HomeView::new(Some("test".to_string()), tools).unwrap();
+    view.group_by = GroupByMode::Tpm;
+    view.flat_items = view.build_flat_items();
+
+    let groups: Vec<_> = view
+        .flat_items
+        .iter()
+        .filter(|i| matches!(i, Item::Group { .. }))
+        .collect();
+    assert_eq!(
+        groups.len(),
+        0,
+        "manual group_path must not leak into Tpm mode"
+    );
+}
+
+/// E-02 regression: orchestrator titles containing `/` must not create
+/// nested group hierarchies.
+#[test]
+#[serial]
+fn test_tpm_group_by_slash_in_title_no_nested_groups() {
+    use crate::session::config::GroupByMode;
+    let temp = TempDir::new().unwrap();
+    setup_test_home(&temp);
+    let storage = Storage::new("test").unwrap();
+
+    let orchestrator = Instance::new("feature/auth-refactor", "/tmp/orch");
+    let orch_id = orchestrator.id.clone();
+
+    let mut child = Instance::new("child-task", "/tmp/c");
+    child.parent_session_id = Some(orch_id);
+
+    let instances = vec![orchestrator, child];
+    storage.save(&instances).unwrap();
+
+    let tools = AvailableTools::with_tools(&["claude"]);
+    let mut view = HomeView::new(Some("test".to_string()), tools).unwrap();
+    view.group_by = GroupByMode::Tpm;
+    view.flat_items = view.build_flat_items();
+
+    let groups: Vec<_> = view
+        .flat_items
+        .iter()
+        .filter_map(|i| match i {
+            Item::Group { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(groups.len(), 1, "should have exactly 1 group, not nested");
+    assert_eq!(
+        groups[0], "feature - auth-refactor",
+        "slash in title should be sanitized"
+    );
+}
+
+/// Self-referential parent_session_id must not group a session under itself.
+#[test]
+#[serial]
+fn test_tpm_group_by_self_referential_stays_ungrouped() {
+    use crate::session::config::GroupByMode;
+    let temp = TempDir::new().unwrap();
+    setup_test_home(&temp);
+    let storage = Storage::new("test").unwrap();
+
+    let mut session = Instance::new("self-ref", "/tmp/sr");
+    session.parent_session_id = Some(session.id.clone());
+
+    let instances = vec![session];
+    storage.save(&instances).unwrap();
+
+    let tools = AvailableTools::with_tools(&["claude"]);
+    let mut view = HomeView::new(Some("test".to_string()), tools).unwrap();
+    view.group_by = GroupByMode::Tpm;
+    view.flat_items = view.build_flat_items();
+
+    let groups: Vec<_> = view
+        .flat_items
+        .iter()
+        .filter(|i| matches!(i, Item::Group { .. }))
+        .collect();
+    assert_eq!(
+        groups.len(),
+        0,
+        "self-referential session must not create a group"
+    );
+    assert_eq!(view.flat_items.len(), 1);
+    if let Item::Session { depth, .. } = &view.flat_items[0] {
+        assert_eq!(*depth, 0, "self-referential session should be at top level");
+    } else {
+        panic!("expected a session item, got a group");
+    }
 }
