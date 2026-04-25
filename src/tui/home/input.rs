@@ -1069,6 +1069,7 @@ impl HomeView {
                     self.selected_group_profile = None;
                     if changed {
                         self.show_state_panel = false;
+                        self.state_panel_fullscreen = false;
                         self.state_panel_cache.reset_scroll();
                     }
                 }
@@ -1077,6 +1078,7 @@ impl HomeView {
                     self.selected_group = Some(path.clone());
                     self.selected_group_profile = self.profile_for_cursor(self.cursor);
                     self.show_state_panel = false;
+                    self.state_panel_fullscreen = false;
                 }
             }
         }

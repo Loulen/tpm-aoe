@@ -2575,3 +2575,24 @@ fn test_state_panel_fullscreen_defaults_to_false() {
     let env = create_test_env_empty();
     assert!(!env.view.state_panel_fullscreen);
 }
+
+#[test]
+#[serial]
+fn test_state_panel_fullscreen_resets_on_session_switch() {
+    let mut env = create_test_env_with_sessions(3);
+    // Simulate: user has panel open in fullscreen on session 0
+    env.view.cursor = 0;
+    env.view.update_selected();
+    env.view.show_state_panel = true;
+    env.view.state_panel_fullscreen = true;
+
+    // Navigate to session 1
+    env.view.handle_key(key(KeyCode::Down));
+
+    // Both flags must be cleared when switching sessions
+    assert!(!env.view.show_state_panel);
+    assert!(
+        !env.view.state_panel_fullscreen,
+        "state_panel_fullscreen should reset when switching sessions"
+    );
+}
