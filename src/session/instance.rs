@@ -244,9 +244,12 @@ impl Instance {
             if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                 continue;
             }
-            let stem = path.file_stem()?.to_string_lossy().to_string();
-            // Skip non-UUID filenames (e.g. if any other .jsonl exists)
-            if stem.len() != 36 || stem.chars().filter(|c| *c == '-').count() != 4 {
+            let Some(stem_os) = path.file_stem() else {
+                continue;
+            };
+            let stem = stem_os.to_string_lossy().to_string();
+            // Skip non-UUID filenames: must be 36 chars, hex digits and hyphens only
+            if stem.len() != 36 || !stem.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
                 continue;
             }
             if let Ok(meta) = entry.metadata() {
@@ -468,10 +471,8 @@ impl Instance {
     /// already ran in the background creation poller).
     ///
     /// When `resume_id` is `Some` and the tool is `"claude"`, the session
-    /// launches with `--resume <id>`. When `resume_id` is `None` but
-    /// `self.claude_session_id` is `Some`, the session falls back to
-    /// `--continue`. The stored `claude_session_id` is cleared after a
-    /// successful start to avoid stale IDs on subsequent restarts.
+    /// launches with `--resume <id>`. The caller (`app.rs`) is responsible
+    /// for clearing the stored `claude_session_id` after a successful start.
     pub fn start_with_size_opts(
         &mut self,
         size: Option<(u16, u16)>,
@@ -539,15 +540,9 @@ impl Instance {
             }
         }
 
-        // Compute Claude-specific resume/continue flag (only for tool == "claude")
+        // Compute Claude-specific --resume flag (only for tool == "claude")
         let resume_flag = if self.tool == "claude" {
-            if let Some(id) = resume_id {
-                Some(format!("--resume {}", id))
-            } else if self.claude_session_id.is_some() {
-                Some("--continue".to_string())
-            } else {
-                None
-            }
+            resume_id.map(|id| format!("--resume {}", shell_escape(id)))
         } else {
             None
         };
@@ -706,11 +701,6 @@ impl Instance {
 
         self.status = Status::Starting;
         self.last_start_time = Some(std::time::Instant::now());
-
-        // Clear stored Claude session ID after start to avoid stale IDs
-        if resume_flag.is_some() {
-            self.claude_session_id = None;
-        }
 
         Ok(())
     }
@@ -1803,8 +1793,11 @@ mod tests {
             if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                 continue;
             }
-            let stem = path.file_stem().unwrap().to_string_lossy().to_string();
-            if stem.len() != 36 || stem.chars().filter(|c| *c == '-').count() != 4 {
+            let Some(stem_os) = path.file_stem() else {
+                continue;
+            };
+            let stem = stem_os.to_string_lossy().to_string();
+            if stem.len() != 36 || !stem.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
                 continue;
             }
             if let Ok(meta) = entry.metadata() {
