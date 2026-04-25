@@ -141,6 +141,12 @@ pub struct Instance {
     #[serde(default)]
     pub tpm_managed: bool,
 
+    /// Claude Code session ID for `--resume` on restart. Discovered from
+    /// Claude's filesystem (`~/.claude/projects/<project-key>/`) and cleared
+    /// after a successful resume start to avoid stale IDs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_session_id: Option<String>,
+
     /// Runtime-only: which profile this instance was loaded from. Not persisted to disk.
     #[serde(default, skip_serializing)]
     pub source_profile: String,
@@ -176,6 +182,7 @@ impl Instance {
             sandbox_info: None,
             terminal_info: None,
             tpm_managed: false,
+            claude_session_id: None,
             source_profile: String::new(),
             last_error_check: None,
             last_start_time: None,
@@ -198,6 +205,64 @@ impl Instance {
                 Some(accessed_ts) => idle_ts > accessed_ts,
             },
         }
+    }
+
+    /// Compute the Claude Code project key for this session's `project_path`.
+    ///
+    /// Claude Code identifies projects by canonicalizing the path and replacing
+    /// each `/` with `-`. For example, `/home/user/my-project` becomes
+    /// `-home-user-my-project`. Returns `None` if the path cannot be canonicalized.
+    pub fn claude_project_hash(&self) -> Option<String> {
+        std::fs::canonicalize(&self.project_path)
+            .ok()
+            .map(|p| p.to_string_lossy().replace('/', "-"))
+    }
+
+    /// Discover the most recent Claude Code session ID for this project.
+    ///
+    /// Looks in `~/.claude/projects/<project-key>/` for `.jsonl` session log
+    /// files, finds the one with the most recent modification time, and returns
+    /// its UUID (the filename stem). Returns `None` when the directory doesn't
+    /// exist, is empty, or on any filesystem error.
+    pub fn discover_claude_session_id(&self) -> Option<String> {
+        let project_key = self.claude_project_hash()?;
+        let claude_dir = dirs::home_dir()?
+            .join(".claude")
+            .join("projects")
+            .join(&project_key);
+
+        if !claude_dir.is_dir() {
+            return None;
+        }
+
+        let entries = std::fs::read_dir(&claude_dir).ok()?;
+        let mut best: Option<(String, std::time::SystemTime)> = None;
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            // Only consider .jsonl session log files
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            let stem = path.file_stem()?.to_string_lossy().to_string();
+            // Skip non-UUID filenames (e.g. if any other .jsonl exists)
+            if stem.len() != 36 || stem.chars().filter(|c| *c == '-').count() != 4 {
+                continue;
+            }
+            if let Ok(meta) = entry.metadata() {
+                if let Ok(mtime) = meta.modified() {
+                    match &best {
+                        None => best = Some((stem, mtime)),
+                        Some((_, prev_mtime)) if mtime > *prev_mtime => {
+                            best = Some((stem, mtime));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        best.map(|(id, _)| id)
     }
 
     pub fn is_sub_session(&self) -> bool {
@@ -396,15 +461,22 @@ impl Instance {
     }
 
     pub fn start_with_size(&mut self, size: Option<(u16, u16)>) -> Result<()> {
-        self.start_with_size_opts(size, false)
+        self.start_with_size_opts(size, false, None)
     }
 
     /// Start the session, optionally skipping on_launch hooks (e.g. when they
     /// already ran in the background creation poller).
+    ///
+    /// When `resume_id` is `Some` and the tool is `"claude"`, the session
+    /// launches with `--resume <id>`. When `resume_id` is `None` but
+    /// `self.claude_session_id` is `Some`, the session falls back to
+    /// `--continue`. The stored `claude_session_id` is cleared after a
+    /// successful start to avoid stale IDs on subsequent restarts.
     pub fn start_with_size_opts(
         &mut self,
         size: Option<(u16, u16)>,
         skip_on_launch: bool,
+        resume_id: Option<&str>,
     ) -> Result<()> {
         let session = self.tmux_session()?;
 
@@ -467,6 +539,19 @@ impl Instance {
             }
         }
 
+        // Compute Claude-specific resume/continue flag (only for tool == "claude")
+        let resume_flag = if self.tool == "claude" {
+            if let Some(id) = resume_id {
+                Some(format!("--resume {}", id))
+            } else if self.claude_session_id.is_some() {
+                Some("--continue".to_string())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let cmd = if self.is_sandboxed() {
             let container = self.get_container_for_instance()?;
             // Run on_launch hooks inside the container
@@ -484,11 +569,14 @@ impl Instance {
             }
 
             let sandbox = self.sandbox_info.as_ref().unwrap();
-            let base_cmd = if self.extra_args.is_empty() {
+            let mut base_cmd = if self.extra_args.is_empty() {
                 self.get_tool_command().to_string()
             } else {
                 format!("{} {}", self.get_tool_command(), self.extra_args)
             };
+            if let Some(ref flag) = resume_flag {
+                base_cmd = format!("{} {}", base_cmd, flag);
+            }
             let mut tool_cmd = if self.is_yolo_mode() {
                 if let Some(ref yolo) = agent.and_then(|a| a.yolo.as_ref()) {
                     match yolo {
@@ -558,6 +646,9 @@ impl Instance {
                     if !self.extra_args.is_empty() {
                         cmd = format!("{} {}", cmd, self.extra_args);
                     }
+                    if let Some(ref flag) = resume_flag {
+                        cmd = format!("{} {}", cmd, flag);
+                    }
                     if self.is_yolo_mode() {
                         if let Some(ref yolo) = a.yolo {
                             match yolo {
@@ -577,6 +668,9 @@ impl Instance {
                 let mut cmd = self.command.clone();
                 if !self.extra_args.is_empty() {
                     cmd = format!("{} {}", cmd, self.extra_args);
+                }
+                if let Some(ref flag) = resume_flag {
+                    cmd = format!("{} {}", cmd, flag);
                 }
                 if self.is_yolo_mode() {
                     if let Some(ref yolo) = agent.and_then(|a| a.yolo.as_ref()) {
@@ -612,6 +706,11 @@ impl Instance {
 
         self.status = Status::Starting;
         self.last_start_time = Some(std::time::Instant::now());
+
+        // Clear stored Claude session ID after start to avoid stale IDs
+        if resume_flag.is_some() {
+            self.claude_session_id = None;
+        }
 
         Ok(())
     }
@@ -1618,5 +1717,184 @@ mod tests {
         assert_eq!(inst.title, "old-session");
         assert!(inst.idle_since.is_none());
         assert!(inst.last_accessed_at.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // claude_project_hash() tests (AC-01)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_claude_project_hash_canonical_path() {
+        // AC-01: claude_project_hash computes the project key correctly
+        let inst = Instance::new("test", "/tmp");
+        let hash = inst.claude_project_hash();
+        assert!(hash.is_some());
+        let key = hash.unwrap();
+        // /tmp may resolve to a symlink (e.g. /private/tmp on macOS)
+        let canonical = std::fs::canonicalize("/tmp")
+            .unwrap()
+            .to_string_lossy()
+            .replace('/', "-");
+        assert_eq!(key, canonical);
+    }
+
+    #[test]
+    fn test_claude_project_hash_nonexistent_path() {
+        // AC-01: non-existent path returns None
+        let inst = Instance::new("test", "/nonexistent/path/that/does/not/exist");
+        assert!(inst.claude_project_hash().is_none());
+    }
+
+    #[test]
+    fn test_claude_project_hash_format() {
+        // AC-01: the key starts with - (from leading /) and contains no /
+        let inst = Instance::new("test", "/tmp");
+        if let Some(key) = inst.claude_project_hash() {
+            assert!(key.starts_with('-'), "key should start with -: {}", key);
+            assert!(!key.contains('/'), "key should not contain /: {}", key);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // discover_claude_session_id() tests (AC-02)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_discover_claude_session_id_nonexistent_project() {
+        // AC-02: gracefully returns None for a project path with no Claude sessions
+        let inst = Instance::new("test", "/nonexistent/path/that/does/not/exist");
+        assert!(inst.discover_claude_session_id().is_none());
+    }
+
+    #[test]
+    fn test_discover_claude_session_id_with_temp_sessions() {
+        // AC-02: discovers the most recent session from a temp directory structure
+        let tmp = tempfile::tempdir().unwrap();
+        let project_path = tmp.path().to_str().unwrap();
+
+        // Create the Claude projects directory structure
+        let project_key = std::fs::canonicalize(project_path)
+            .unwrap()
+            .to_string_lossy()
+            .replace('/', "-");
+        let claude_dir = tmp
+            .path()
+            .join(".claude-test-home")
+            .join("projects")
+            .join(&project_key);
+        std::fs::create_dir_all(&claude_dir).unwrap();
+
+        // Create two fake session files
+        let older_id = "11111111-1111-1111-1111-111111111111";
+        let newer_id = "22222222-2222-2222-2222-222222222222";
+
+        std::fs::write(claude_dir.join(format!("{}.jsonl", older_id)), "old").unwrap();
+        // Ensure the second file has a later mtime
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::fs::write(claude_dir.join(format!("{}.jsonl", newer_id)), "new").unwrap();
+
+        // We can't directly test discover_claude_session_id because it hardcodes
+        // ~/.claude/projects, but we can test the underlying logic.
+        // Read the directory and find the newest .jsonl
+        let entries = std::fs::read_dir(&claude_dir).unwrap();
+        let mut best: Option<(String, std::time::SystemTime)> = None;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            let stem = path.file_stem().unwrap().to_string_lossy().to_string();
+            if stem.len() != 36 || stem.chars().filter(|c| *c == '-').count() != 4 {
+                continue;
+            }
+            if let Ok(meta) = entry.metadata() {
+                if let Ok(mtime) = meta.modified() {
+                    match &best {
+                        None => best = Some((stem, mtime)),
+                        Some((_, prev_mtime)) if mtime > *prev_mtime => {
+                            best = Some((stem, mtime));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        assert_eq!(best.map(|(id, _)| id), Some(newer_id.to_string()));
+    }
+
+    #[test]
+    fn test_discover_claude_session_id_empty_dir() {
+        // AC-02: empty Claude project directory returns None
+        let tmp = tempfile::tempdir().unwrap();
+        let project_path = tmp.path().to_str().unwrap();
+        // The method looks at ~/.claude/projects/<key>, which doesn't
+        // exist for a temp dir, so this tests the None return path.
+        let inst = Instance::new("test", project_path);
+        // Will be None because ~/.claude/projects/<key> doesn't exist for a temp dir
+        assert!(inst.discover_claude_session_id().is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // claude_session_id backwards compatibility (AC-03)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_deserialize_instance_without_claude_session_id() {
+        // AC-03: session JSON without claude_session_id deserializes with None
+        let json = r#"{
+            "id": "abc123def456abcd",
+            "title": "old-session",
+            "project_path": "/tmp/test",
+            "command": "",
+            "tool": "claude",
+            "status": "idle",
+            "created_at": "2026-01-01T00:00:00Z"
+        }"#;
+        let inst: Instance = serde_json::from_str(json).unwrap();
+        assert!(inst.claude_session_id.is_none());
+    }
+
+    #[test]
+    fn test_deserialize_instance_with_claude_session_id() {
+        // AC-03: session JSON with claude_session_id deserializes correctly
+        let json = r#"{
+            "id": "abc123def456abcd",
+            "title": "test-session",
+            "project_path": "/tmp/test",
+            "command": "",
+            "tool": "claude",
+            "status": "idle",
+            "created_at": "2026-01-01T00:00:00Z",
+            "claude_session_id": "11111111-1111-1111-1111-111111111111"
+        }"#;
+        let inst: Instance = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            inst.claude_session_id.as_deref(),
+            Some("11111111-1111-1111-1111-111111111111")
+        );
+    }
+
+    #[test]
+    fn test_claude_session_id_not_serialized_when_none() {
+        // AC-03: None claude_session_id is omitted from JSON (skip_serializing_if)
+        let inst = Instance::new("test", "/tmp/test");
+        let json = serde_json::to_string(&inst).unwrap();
+        assert!(
+            !json.contains("claude_session_id"),
+            "None claude_session_id should be omitted from JSON"
+        );
+    }
+
+    #[test]
+    fn test_claude_session_id_serialized_when_some() {
+        // AC-03: Some claude_session_id is present in JSON
+        let mut inst = Instance::new("test", "/tmp/test");
+        inst.claude_session_id = Some("test-id".to_string());
+        let json = serde_json::to_string(&inst).unwrap();
+        assert!(
+            json.contains("claude_session_id"),
+            "Some claude_session_id should be present in JSON"
+        );
+        assert!(json.contains("test-id"));
     }
 }

@@ -565,10 +565,29 @@ impl App {
             // Skip on_launch hooks if they already ran in the background creation poller
             let skip_on_launch = self.home.take_on_launch_hooks_ran(session_id);
 
+            // For Claude sessions, discover the latest session ID for --resume
+            let resume_id = if instance.tool == "claude" {
+                let discovered = instance.discover_claude_session_id();
+                if let Some(ref id) = discovered {
+                    tracing::debug!(session_id, claude_session_id = %id, "discovered Claude session ID for resume");
+                    // Store the discovered ID in the instance for fallback use
+                    self.home.mutate_instance(session_id, |inst| {
+                        inst.claude_session_id = discovered.clone();
+                    });
+                }
+                discovered
+            } else {
+                None
+            };
+
             self.home
                 .set_instance_status(session_id, crate::session::Status::Starting);
             let mut inst = instance.clone();
-            if let Err(e) = inst.start_with_size_opts(size, skip_on_launch) {
+            // Sync the claude_session_id from the mutated instance
+            if let Some(stored) = self.home.get_instance(session_id) {
+                inst.claude_session_id = stored.claude_session_id.clone();
+            }
+            if let Err(e) = inst.start_with_size_opts(size, skip_on_launch, resume_id.as_deref()) {
                 self.home
                     .set_instance_error(session_id, Some(e.to_string()));
                 self.home
@@ -576,6 +595,12 @@ impl App {
                 return Ok(());
             }
             self.home.set_instance_error(session_id, None);
+            // Clear stored Claude session ID after successful resume start
+            if resume_id.is_some() {
+                self.home.mutate_instance(session_id, |inst| {
+                    inst.claude_session_id = None;
+                });
+            }
         }
 
         let attach_result = self.with_raw_mode_disabled(terminal, || tmux_session.attach())?;
