@@ -6,35 +6,11 @@
 //! out via `TPM_WORKFLOW_PATH` so the test stays hermetic.
 
 use serial_test::serial;
-use std::path::Path;
 use std::process::Command;
 use tempfile::TempDir;
 
 use crate::harness::TuiTestHarness;
-
-/// Read the persisted `sessions.json` from the harness's isolated profile dir.
-fn read_sessions(h: &TuiTestHarness) -> serde_json::Value {
-    let path = if cfg!(target_os = "linux") {
-        h.home_path()
-            .join(".config/agent-of-empires/profiles/default/sessions.json")
-    } else {
-        h.home_path()
-            .join(".agent-of-empires/profiles/default/sessions.json")
-    };
-    let raw = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e));
-    serde_json::from_str(&raw).expect("invalid sessions JSON")
-}
-
-/// Drop a fake `agents/orchestrator.md` under `root`. Returns the path so the
-/// test can assert on the resolved value.
-fn write_fake_orchestrator(root: &Path) -> std::path::PathBuf {
-    let agents = root.join("agents");
-    std::fs::create_dir_all(&agents).expect("create agents dir");
-    let file = agents.join("orchestrator.md");
-    std::fs::write(&file, "# Fake Orchestrator\n").expect("write orchestrator.md");
-    file
-}
+use crate::helpers::{read_sessions, write_fake_orchestrator};
 
 #[test]
 #[serial]

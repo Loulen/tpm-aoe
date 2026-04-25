@@ -16,12 +16,26 @@
 //! Docker-dependent tests are `#[ignore]` and require a running Docker daemon.
 
 mod harness;
+pub(crate) mod helpers;
 
 mod cli;
 mod errors;
+mod events;
 mod new_session;
 mod profile_picker;
+mod profile_template;
 mod sandbox;
+mod send_keys;
 mod tpm;
+mod tpm_artifacts;
+mod tpm_config;
+mod tpm_prompt_injection;
+mod tpm_tier;
+mod tpm_tui_create;
+mod tpm_tui_delete;
+mod tui_config_settings;
+mod tui_full_lifecycle;
 mod tui_launch;
+mod tui_state_panel;
 mod unified_view;
+mod worktree_from;
