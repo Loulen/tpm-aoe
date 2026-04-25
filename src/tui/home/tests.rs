@@ -2790,3 +2790,41 @@ fn test_tpm_group_by_slash_in_title_no_nested_groups() {
         "slash in title should be sanitized"
     );
 }
+
+/// Self-referential parent_session_id must not group a session under itself.
+#[test]
+#[serial]
+fn test_tpm_group_by_self_referential_stays_ungrouped() {
+    use crate::session::config::GroupByMode;
+    let temp = TempDir::new().unwrap();
+    setup_test_home(&temp);
+    let storage = Storage::new("test").unwrap();
+
+    let mut session = Instance::new("self-ref", "/tmp/sr");
+    session.parent_session_id = Some(session.id.clone());
+
+    let instances = vec![session];
+    storage.save(&instances).unwrap();
+
+    let tools = AvailableTools::with_tools(&["claude"]);
+    let mut view = HomeView::new(Some("test".to_string()), tools).unwrap();
+    view.group_by = GroupByMode::Tpm;
+    view.flat_items = view.build_flat_items();
+
+    let groups: Vec<_> = view
+        .flat_items
+        .iter()
+        .filter(|i| matches!(i, Item::Group { .. }))
+        .collect();
+    assert_eq!(
+        groups.len(),
+        0,
+        "self-referential session must not create a group"
+    );
+    assert_eq!(view.flat_items.len(), 1);
+    if let Item::Session { depth, .. } = &view.flat_items[0] {
+        assert_eq!(*depth, 0, "self-referential session should be at top level");
+    } else {
+        panic!("expected a session item, got a group");
+    }
+}

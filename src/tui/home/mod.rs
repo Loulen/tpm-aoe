@@ -1055,11 +1055,13 @@ impl HomeView {
                 // non-children don't leak into spurious group headers.
                 inst.group_path = String::new();
                 if let Some(parent_id) = &inst.parent_session_id {
-                    if let Some(title) = parent_titles.get(parent_id) {
-                        // Child session: group under parent's title.
-                        // Sanitize `/` so GroupTree doesn't create nested groups
-                        // for titles like "feature/auth-refactor".
-                        inst.group_path = title.replace('/', " - ");
+                    if parent_id != &inst.id {
+                        if let Some(title) = parent_titles.get(parent_id) {
+                            // Child session: group under parent's title.
+                            // Sanitize `/` so GroupTree doesn't create nested groups
+                            // for titles like "feature/auth-refactor".
+                            inst.group_path = title.replace('/', " - ");
+                        }
                     }
                 }
                 inst
