@@ -115,20 +115,36 @@ impl HomeView {
                 }
             }
 
-            let right_chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-                .split(chunks[1]);
-
-            self.render_preview(frame, right_chunks[0], theme);
             let scroll = self.state_panel_cache.scroll_offset;
-            super::state_panel::render_state_panel(
-                frame,
-                right_chunks[1],
-                &self.state_panel_cache.content,
-                theme,
-                scroll,
-            );
+            let fullscreen = self.state_panel_fullscreen;
+
+            if fullscreen {
+                // Fullscreen: state panel takes the entire right area
+                super::state_panel::render_state_panel(
+                    frame,
+                    chunks[1],
+                    &self.state_panel_cache.content,
+                    theme,
+                    scroll,
+                    true,
+                );
+            } else {
+                // Split mode: preview + state panel side by side
+                let right_chunks = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+                    .split(chunks[1]);
+
+                self.render_preview(frame, right_chunks[0], theme);
+                super::state_panel::render_state_panel(
+                    frame,
+                    right_chunks[1],
+                    &self.state_panel_cache.content,
+                    theme,
+                    scroll,
+                    false,
+                );
+            }
         } else {
             // Refresh cache in background even when panel is hidden (for poll)
             if self.show_state_panel {
@@ -903,10 +919,18 @@ impl HomeView {
         // Show S: State hint when a TPM session is selected (uses cached path, no fs stat)
         if self.selected_session.is_some() && self.state_panel_cache.has_state_file() {
             if self.show_state_panel {
+                let fullscreen_hint = if self.state_panel_fullscreen {
+                    " Split "
+                } else {
+                    " Full "
+                };
                 spans.extend([
                     Span::styled("│", sep_style),
                     Span::styled(" S", key_style),
                     Span::styled(" Close ", desc_style),
+                    Span::styled("│", sep_style),
+                    Span::styled(" F", key_style),
+                    Span::styled(fullscreen_hint, desc_style),
                     Span::styled("│", sep_style),
                     Span::styled(" J/K", key_style),
                     Span::styled(" Scroll ", desc_style),

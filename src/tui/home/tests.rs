@@ -2568,3 +2568,10 @@ fn test_project_group_name_handles_trailing_slash() {
     let inst = Instance::new("test", "/home/user/my-project/");
     assert_eq!(project_group_name(&inst), "my-project");
 }
+
+#[test]
+#[serial]
+fn test_state_panel_fullscreen_defaults_to_false() {
+    let env = create_test_env_empty();
+    assert!(!env.view.state_panel_fullscreen);
+}
