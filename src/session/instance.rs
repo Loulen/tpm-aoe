@@ -113,6 +113,14 @@ pub struct Instance {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_accessed_at: Option<DateTime<Utc>>,
 
+    /// When the session last transitioned to Idle status. Set when status
+    /// changes from non-Idle to Idle; cleared on reverse transition.
+    /// Used with `last_accessed_at` to implement an "unread notification"
+    /// indicator: if idle_since > last_accessed_at, the user hasn't seen
+    /// this idle session yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_since: Option<DateTime<Utc>>,
+
     // Git worktree integration
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_info: Option<WorktreeInfo>,
@@ -162,6 +170,7 @@ impl Instance {
             status: Status::Idle,
             created_at: Utc::now(),
             last_accessed_at: None,
+            idle_since: None,
             worktree_info: None,
             workspace_info: None,
             sandbox_info: None,
@@ -171,6 +180,23 @@ impl Instance {
             last_error_check: None,
             last_start_time: None,
             last_error: None,
+        }
+    }
+
+    /// Returns true when this session went idle after the user last viewed it,
+    /// implementing an "unread notification" indicator. Only returns true for
+    /// sessions currently in Idle status to avoid stale indicators on Error or
+    /// Stopped sessions.
+    pub fn needs_attention(&self) -> bool {
+        if self.status != Status::Idle {
+            return false;
+        }
+        match self.idle_since {
+            None => false,
+            Some(idle_ts) => match self.last_accessed_at {
+                None => true,
+                Some(accessed_ts) => idle_ts > accessed_ts,
+            },
         }
     }
 
@@ -1497,5 +1523,100 @@ mod tests {
 
         // Longer names like "opencode" should still match.
         assert!(pane_has_agent_content("OpenCode v1.0", "opencode"));
+    }
+
+    // -----------------------------------------------------------------------
+    // needs_attention() tests (AC-01, AC-03)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_needs_attention_idle_since_set_last_accessed_none() {
+        // AC-01: idle_since = Some(T1), last_accessed_at = None => true
+        let mut inst = Instance::new("test", "/tmp/test");
+        inst.status = Status::Idle;
+        inst.idle_since = Some(Utc::now());
+        inst.last_accessed_at = None;
+        assert!(inst.needs_attention());
+    }
+
+    #[test]
+    fn test_needs_attention_idle_after_last_access() {
+        // AC-01: idle_since = Some(T2), last_accessed_at = Some(T1), T2 > T1 => true
+        let mut inst = Instance::new("test", "/tmp/test");
+        inst.status = Status::Idle;
+        let t1 = Utc::now() - chrono::Duration::seconds(60);
+        let t2 = Utc::now();
+        inst.last_accessed_at = Some(t1);
+        inst.idle_since = Some(t2);
+        assert!(inst.needs_attention());
+    }
+
+    #[test]
+    fn test_needs_attention_accessed_after_idle() {
+        // AC-01: last_accessed_at = Some(T3), idle_since = Some(T2), T3 > T2 => false
+        let mut inst = Instance::new("test", "/tmp/test");
+        inst.status = Status::Idle;
+        let t2 = Utc::now() - chrono::Duration::seconds(60);
+        let t3 = Utc::now();
+        inst.idle_since = Some(t2);
+        inst.last_accessed_at = Some(t3);
+        assert!(!inst.needs_attention());
+    }
+
+    #[test]
+    fn test_needs_attention_idle_since_none() {
+        // AC-01: idle_since = None => false
+        let mut inst = Instance::new("test", "/tmp/test");
+        inst.status = Status::Idle;
+        inst.idle_since = None;
+        assert!(!inst.needs_attention());
+    }
+
+    #[test]
+    fn test_needs_attention_false_for_non_idle_statuses() {
+        // AC-03: non-Idle statuses return false even if idle_since is set
+        let non_idle = [
+            Status::Running,
+            Status::Waiting,
+            Status::Unknown,
+            Status::Stopped,
+            Status::Error,
+            Status::Starting,
+            Status::Deleting,
+            Status::Creating,
+        ];
+        for status in non_idle {
+            let mut inst = Instance::new("test", "/tmp/test");
+            inst.status = status;
+            inst.idle_since = Some(Utc::now());
+            inst.last_accessed_at = None;
+            assert!(
+                !inst.needs_attention(),
+                "needs_attention() should be false for {:?}",
+                status
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Backwards compatibility deserialization test (AC-02)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_deserialize_instance_without_idle_since() {
+        // AC-02: session JSON without idle_since deserializes with idle_since = None
+        let json = r#"{
+            "id": "abc123def456abcd",
+            "title": "old-session",
+            "project_path": "/tmp/test",
+            "command": "",
+            "tool": "claude",
+            "status": "idle",
+            "created_at": "2026-01-01T00:00:00Z"
+        }"#;
+        let inst: Instance = serde_json::from_str(json).unwrap();
+        assert_eq!(inst.title, "old-session");
+        assert!(inst.idle_since.is_none());
+        assert!(inst.last_accessed_at.is_none());
     }
 }

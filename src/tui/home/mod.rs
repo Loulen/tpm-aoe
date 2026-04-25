@@ -56,6 +56,19 @@ fn project_group_name(inst: &Instance) -> String {
         })
 }
 
+/// Update `idle_since` when a session's status transitions to or from Idle.
+/// Must be called BEFORE overwriting `inst.status` with `new_status`.
+fn apply_idle_transition(inst: &mut Instance, new_status: crate::session::Status) {
+    use crate::session::Status;
+
+    let old = inst.status;
+    if old != Status::Idle && new_status == Status::Idle {
+        inst.idle_since = Some(chrono::Utc::now());
+    } else if old == Status::Idle && new_status != Status::Idle {
+        inst.idle_since = None;
+    }
+}
+
 pub(super) struct GroupRenameContext {
     pub(super) old_path: String,
     pub(super) old_profile: String,
@@ -417,6 +430,10 @@ impl HomeView {
                     inst.last_error = prev.last_error.clone();
                     inst.last_error_check = prev.last_error_check;
                     inst.last_start_time = prev.last_start_time;
+                    // Preserve idle tracking fields so a failed save()
+                    // doesn't let reload() overwrite them with stale disk values
+                    inst.last_accessed_at = prev.last_accessed_at;
+                    inst.idle_since = prev.idle_since;
                 }
             }
             // Rebuild this profile's tree from disk, preserving any collapsed
@@ -500,6 +517,7 @@ impl HomeView {
                     let new_status = update.status;
                     let new_error = update.last_error;
                     self.mutate_instance(&update.id, |inst| {
+                        apply_idle_transition(inst, new_status);
                         inst.status = new_status;
                         inst.last_error = new_error;
                     });
@@ -1080,7 +1098,10 @@ impl HomeView {
     }
 
     pub fn set_instance_status(&mut self, id: &str, status: crate::session::Status) {
-        self.mutate_instance(id, |inst| inst.status = status);
+        self.mutate_instance(id, |inst| {
+            apply_idle_transition(inst, status);
+            inst.status = status;
+        });
     }
 
     pub fn save(&self) -> anyhow::Result<()> {

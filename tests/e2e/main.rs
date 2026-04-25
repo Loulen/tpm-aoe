@@ -21,6 +21,7 @@ pub(crate) mod helpers;
 mod cli;
 mod errors;
 mod events;
+mod idle_highlight;
 mod new_session;
 mod profile_picker;
 mod profile_template;
